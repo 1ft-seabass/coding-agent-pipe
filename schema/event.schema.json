@@ -1,0 +1,173 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/1ft-seabass/coding-agent-pipe/schema/event.schema.json",
+  "title": "coding-agent-pipe の契約",
+  "description": "受け手(viewer など)に届く webhook のイベントと、GET /info のレスポンス。claude-code-pipe 0.9.x の出力も、この同じスキーマに合う(pipeApp と engine は coding-agent-pipe が追加した任意の項目。無ければ pipeApp は claude-code-pipe、engine は claude-code とみなす)。未知の項目は許す(受け手は追加に寛容であること)。",
+
+  "oneOf": [
+    { "$ref": "#/$defs/webhookEvent" }
+  ],
+
+  "$defs": {
+    "webhookEvent": {
+      "title": "webhook イベント(pipe → 受け手の POST)",
+      "type": "object",
+      "allOf": [
+        { "$ref": "#/$defs/common" },
+        {
+          "if": { "properties": { "type": { "enum": ["user-message-received", "assistant-response-completed"] } } },
+          "then": { "$ref": "#/$defs/messageEvent" }
+        },
+        {
+          "if": { "properties": { "type": { "enum": ["session-started", "session-error", "session-timeout", "cancel-initiated", "process-exit"] } } },
+          "then": { "$ref": "#/$defs/processEvent" }
+        },
+        {
+          "if": { "properties": { "type": { "const": "assistant-response-completed" } } },
+          "then": { "$ref": "#/$defs/assistantEvent" }
+        }
+      ]
+    },
+
+    "common": {
+      "title": "すべてのイベントに共通する項目",
+      "type": "object",
+      "required": ["type", "version", "sessionId", "timestamp", "cwdPath", "cwdName", "callbackUrl", "os", "communicationMode", "backendType"],
+      "properties": {
+        "type": {
+          "enum": ["user-message-received", "assistant-response-completed", "session-started", "session-error", "session-timeout", "cancel-initiated", "process-exit"],
+          "description": "イベントの種別"
+        },
+        "version": { "type": "string", "description": "送り元アプリのバージョン" },
+        "sessionId": { "type": "string", "minLength": 1 },
+        "timestamp": { "type": "string", "format": "date-time", "description": "メッセージ系は JSONL の時刻、プロセス系は pipe の実行時刻" },
+        "cwdPath": { "type": "string", "description": "pipe を起動したディレクトリ" },
+        "cwdName": { "type": "string" },
+        "callbackUrl": { "type": ["string", "null"], "description": "受け手から pipe に戻るときの URL" },
+        "os": { "enum": ["mac", "linux", "windows"] },
+        "communicationMode": { "enum": ["watch-only", "webhook-only", "bidirectional"] },
+        "backendType": { "type": "string", "description": "旧来の互換項目(例: claude_code)。どのコーディングエージェントかは engine を見る" },
+        "pipeApp": { "const": "coding-agent-pipe", "description": "どのアプリから来たか。claude-code-pipe は送らない(無ければ claude-code-pipe)" },
+        "engine": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]*$", "description": "どのコーディングエージェントか(例: claude-code)。claude-code-pipe は送らない(無ければ claude-code)" },
+        "mqttCommandTopic": { "type": "string" },
+        "projectPath": { "type": "string" },
+        "projectName": { "type": "string" },
+        "projectTitle": { "type": "string" }
+      }
+    },
+
+    "messageEvent": {
+      "title": "メッセージ系(user-message-received / assistant-response-completed)",
+      "type": "object",
+      "required": ["source", "isSubagent", "isMeta", "message"],
+      "properties": {
+        "source": { "enum": ["api", "cli"], "description": "pipe 経由(api)か、直接操作(cli)か" },
+        "isSubagent": { "type": "boolean" },
+        "isMeta": { "type": "boolean" },
+        "git": {
+          "type": ["object", "null"],
+          "description": "プロジェクトが git リポジトリでなければ null",
+          "required": ["branch", "commit"],
+          "properties": {
+            "branch": { "type": ["string", "null"] },
+            "commit": { "type": ["string", "null"] },
+            "isWorktree": { "type": "boolean" },
+            "mainWorktreePath": { "type": ["string", "null"] }
+          }
+        },
+        "message": { "$ref": "#/$defs/message" }
+      }
+    },
+
+    "assistantEvent": {
+      "title": "assistant-response-completed に固有の項目",
+      "type": "object",
+      "required": ["tools", "responseTime"],
+      "properties": {
+        "tools": { "type": "array", "items": { "type": "string" }, "description": "この応答で使ったツール名" },
+        "responseTime": { "type": ["number", "null"], "description": "直前のメッセージからの経過秒" }
+      }
+    },
+
+    "processEvent": {
+      "title": "プロセス系(session-started / session-error / session-timeout / cancel-initiated / process-exit)",
+      "type": "object",
+      "properties": {
+        "pid": { "type": "integer" },
+        "code": { "type": ["integer", "null"], "description": "process-exit の終了コード" },
+        "signal": { "type": ["string", "null"], "description": "process-exit の終了シグナル" },
+        "error": { "type": "string" },
+        "resumed": { "type": "boolean", "description": "session-started で、既存セッションの再開なら true" },
+        "model": { "type": ["string", "null"] }
+      }
+    },
+
+    "message": {
+      "title": "正規化されたメッセージ(role と content ブロック)",
+      "type": "object",
+      "required": ["role"],
+      "properties": {
+        "role": { "enum": ["user", "assistant"] },
+        "content": {
+          "oneOf": [
+            { "type": "string" },
+            { "type": "array", "items": { "$ref": "#/$defs/contentBlock" } }
+          ]
+        },
+        "usage": { "$ref": "#/$defs/usage" }
+      }
+    },
+
+    "contentBlock": {
+      "title": "content ブロック。text / thinking / tool_use / tool_result が基本で、未知の種別も許す",
+      "type": "object",
+      "required": ["type"],
+      "properties": {
+        "type": { "type": "string" },
+        "text": { "type": "string" },
+        "thinking": { "type": "string" },
+        "id": { "type": "string", "description": "tool_use の呼び出し ID(後続の tool_result が tool_use_id で参照する)" },
+        "name": { "type": "string" },
+        "input": { "type": "object" },
+        "tool_use_id": { "type": "string" },
+        "is_error": { "type": "boolean" }
+      },
+      "allOf": [
+        { "if": { "properties": { "type": { "const": "text" } } }, "then": { "required": ["text"] } },
+        { "if": { "properties": { "type": { "const": "tool_use" } } }, "then": { "required": ["id", "name"] } },
+        { "if": { "properties": { "type": { "const": "tool_result" } } }, "then": { "required": ["tool_use_id"] } }
+      ]
+    },
+
+    "usage": {
+      "title": "トークン使用量(4種)",
+      "type": "object",
+      "required": ["input_tokens", "output_tokens", "cache_creation_input_tokens", "cache_read_input_tokens"],
+      "properties": {
+        "input_tokens": { "type": "integer", "minimum": 0 },
+        "output_tokens": { "type": "integer", "minimum": 0 },
+        "cache_creation_input_tokens": { "type": "integer", "minimum": 0 },
+        "cache_read_input_tokens": { "type": "integer", "minimum": 0 }
+      }
+    },
+
+    "info": {
+      "title": "GET /info のレスポンス",
+      "type": "object",
+      "required": ["version", "os", "communicationMode", "backendType", "callbackUrl", "mqttCommandTopic", "subscriberCount", "projectTitle", "watchDir"],
+      "properties": {
+        "version": { "type": "string" },
+        "os": { "enum": ["mac", "linux", "windows"] },
+        "communicationMode": { "enum": ["watch-only", "webhook-only", "bidirectional"] },
+        "backendType": { "type": "string" },
+        "pipeApp": { "const": "coding-agent-pipe" },
+        "engine": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]*$" },
+        "callbackUrl": { "type": ["string", "null"] },
+        "mqttCommandTopic": { "type": ["string", "null"] },
+        "subscriberCount": { "type": "integer", "minimum": 0 },
+        "projectTitle": { "type": ["string", "null"] },
+        "watchDir": { "type": "string" }
+      }
+    }
+  }
+}

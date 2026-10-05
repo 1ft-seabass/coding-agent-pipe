@@ -1,0 +1,51 @@
+{
+  "engine": "claude-code",
+  "watchDir": "~/.claude/projects",
+  "port": 3100,
+  "apiToken": "",
+  "projectTitle": "",
+  "callbackUrl": "http://localhost:3100",
+  "subscribers": [
+    {
+      "url": "http://localhost:1880/claude-event",
+      "label": "node-red",
+      "authorization": ""
+    },
+    {
+      "url": "http://localhost:1880/claude-status",
+      "label": "led-trigger"
+    },
+    {
+      "url": "http://localhost:3200/claude-stream",
+      "label": "dashboard"
+    }
+  ],
+  "send": {
+    "defaultAllowedTools": ["Read", "LS", "Grep", "Write", "Bash"],
+    "cancelTimeoutMs": 3000
+  },
+  "mqtt": {
+    "url": "mqtts://broker.example.com:8883",
+    "username": "",
+    "password": "",
+    "commandTopic": "claude/pipe-A/send"
+  },
+  "upload": {
+    "maxBodySize": "10mb",
+    "allowedExtensions": [".jpg", ".jpeg", ".png", ".pdf", ".txt", ".md", ".docx", ".xlsx", ".csv"],
+    "maxAgeDays": 7
+  },
+  "viewer": {
+    "deniedExtensions": [
+      ".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx",
+      ".zip", ".tar", ".gz", ".tgz", ".7z", ".rar",
+      ".exe", ".dll", ".so", ".dylib", ".bin", ".app",
+      ".woff", ".woff2", ".ttf", ".otf", ".eot",
+      ".mp3", ".mp4", ".mov", ".avi", ".wav", ".ogg", ".webm",
+      ".db", ".sqlite", ".sqlite3", ".class", ".jar", ".wasm", ".pyc", ".o"
+    ],
+    "imageExtensions": [".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp", ".ico", ".svg"],
+    "maxFileSize": 1048576,
+    "maxImageFileSize": 5242880
+  }
+}

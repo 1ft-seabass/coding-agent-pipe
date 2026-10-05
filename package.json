@@ -1,0 +1,29 @@
+{
+  "name": "coding-agent-pipe",
+  "version": "0.0.2",
+  "description": "A pipe for coding agent CLI input/output using JSONL and Hono",
+  "type": "module",
+  "main": "src/index.js",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node src/index.js"
+  },
+  "keywords": [
+    "coding-agent",
+    "claude-code",
+    "jsonl",
+    "mqtt",
+    "hono"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "@hono/node-server": "^1.13.0",
+    "chokidar": "^3.5.3",
+    "hono": "^4.6.0",
+    "mqtt": "^5.16.0"
+  }
+}
