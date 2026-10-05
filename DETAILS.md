@@ -1599,7 +1599,11 @@ Each destination in `subscribers` receives the raw content of session messages (
 
 ### ⚠️ `apiToken` and Network Exposure
 
-If `apiToken` is not set, the API can read session content and start agents (`POST /sessions/new`) without authentication. **Use it only inside a trusted network, and always set `apiToken` when exposing it.**
+If `apiToken` is not set, the API can read session content, read files in a project (`POST /projects/file`), and start agents (`POST /sessions/new`) without authentication. **Use it only inside a trusted network, and always set `apiToken` when exposing it.**
+
+**The server listens on all network interfaces** (the address is `::`, which covers every IPv4 and IPv6 address of the machine) on the port set by `port`. It is not limited to the local machine (`127.0.0.1`), and there is currently no setting to limit it. Any machine that can reach the port can call the API: other machines on the same network, other containers on the same Docker network, and other machines on the same Tailscale tailnet.
+
+If you want only the local machine to reach it, limit it outside the server: with a firewall, by publishing the Docker port on the loopback address only (for example, `127.0.0.1:3100:3100`), or behind a reverse proxy.
 
 ---
 
