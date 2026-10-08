@@ -344,6 +344,17 @@ function sendToSession(driver, sessionId, prompt, options = {}) {
 }
 
 /**
+ * プロセスが、まだ動いているか
+ * (ChildProcess の `killed` は、kill() で信号を送れたことを表し、終了したことは表さない。
+ *  SIGINT を送ったあとも真になるので、「動いているか」の判定には使えない)
+ * @param {import('child_process').ChildProcess} proc
+ * @returns {boolean}
+ */
+function isRunning(proc) {
+  return proc.exitCode === null && proc.signalCode === null;
+}
+
+/**
  * 管理中のプロセス一覧を取得
  * @returns {Array}
  */
@@ -354,7 +365,7 @@ function getManagedProcesses() {
       sessionId,
       pid: info.pid,
       startedAt: info.startedAt,
-      alive: !info.proc.killed
+      alive: isRunning(info.proc)
     });
   }
   return list;
@@ -381,7 +392,7 @@ function killProcess(sessionId) {
   }
 
   try {
-    if (!info.proc.killed) {
+    if (isRunning(info.proc)) {
       info.proc.kill('SIGTERM');
       console.log(`[process] Killed process: sessionId=${sessionId}, pid=${info.pid}`);
       managedProcesses.delete(sessionId);
@@ -415,7 +426,7 @@ function killAllProcesses() {
 
   for (const [sessionId, info] of managedProcesses.entries()) {
     try {
-      if (!info.proc.killed) {
+      if (isRunning(info.proc)) {
         info.proc.kill('SIGTERM');
         killedCount++;
         killedSessions.push(sessionId);
@@ -442,6 +453,7 @@ export {
   getManagedProcess,
   killProcess,
   killAllProcesses,
+  isRunning,
   processEvents,
   managedProcesses  // セッション判定用に公開
 };

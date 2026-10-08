@@ -85,8 +85,11 @@ function setupSubscribers(subscribers, source, processEvents, config, adapter) {
 
   // 観測元の message イベントを監視
   source.on('message', (event) => {
+    // 応答時間は、イベントごとに 1 回だけ計算する(subscriber ごとに計算すると、最後のタイムスタンプが
+    // 先に更新されて、2 件目以降の subscriber では 0 になる)
+    const responseTime = trackResponseTime(event, sessionTimestamps);
     for (const subscriber of subscribers) {
-      handleSubscriberEvent(subscriber, event, sessionTimestamps, serverInfo, adapter);
+      handleSubscriberEvent(subscriber, event, responseTime, serverInfo, adapter);
     }
   });
 
@@ -164,9 +167,34 @@ function handleProcessEvent(subscriber, eventType, event, serverInfo) {
 }
 
 /**
- * subscriber ごとにイベントを処理
+ * セッションごとの最終タイムスタンプを更新し、assistant メッセージなら応答時間(秒)を返す
+ * user メッセージは、応答時間の起点を記録するだけ。どちらでもないイベントは、何もしない
+ * @returns {number|null} 応答時間(assistant で、起点があるとき)。それ以外は null
  */
-function handleSubscriberEvent(subscriber, event, sessionTimestamps, serverInfo, adapter) {
+function trackResponseTime(event, sessionTimestamps) {
+  const role = event.message && event.message.role;
+  if (role === 'user') {
+    sessionTimestamps.set(event.sessionId, event.timestamp);
+    return null;
+  }
+  if (role === 'assistant') {
+    let responseTime = null;
+    const lastTimestamp = sessionTimestamps.get(event.sessionId);
+    if (lastTimestamp && event.timestamp) {
+      const diff = new Date(event.timestamp) - new Date(lastTimestamp);
+      responseTime = parseFloat((diff / 1000).toFixed(2)); // 秒単位（数値型）
+    }
+    sessionTimestamps.set(event.sessionId, event.timestamp);
+    return responseTime;
+  }
+  return null;
+}
+
+/**
+ * subscriber ごとにイベントを処理
+ * @param {number|null} responseTime - trackResponseTime が、イベントごとに 1 回だけ計算した応答時間
+ */
+function handleSubscriberEvent(subscriber, event, responseTime, serverInfo, adapter) {
   const { url, label, authorization } = subscriber;
 
   // サブエージェントのセッションかどうかを判定
@@ -183,9 +211,6 @@ function handleSubscriberEvent(subscriber, event, sessionTimestamps, serverInfo,
 
     // Git 情報を取得（キャッシュ付き）
     const gitInfo = getProjectGitInfo(projectPath);
-
-    // タイムスタンプを記録（応答時間計算の起点）
-    sessionTimestamps.set(event.sessionId, event.timestamp);
 
     const payload = {
       type: 'user-message-received',
@@ -217,15 +242,6 @@ function handleSubscriberEvent(subscriber, event, sessionTimestamps, serverInfo,
 
   // assistant メッセージの場合
   if (event.message && event.message.role === 'assistant') {
-    // 応答時間を計算
-    let responseTime = null;
-    const lastTimestamp = sessionTimestamps.get(event.sessionId);
-    if (lastTimestamp && event.timestamp) {
-      const diff = new Date(event.timestamp) - new Date(lastTimestamp);
-      responseTime = parseFloat((diff / 1000).toFixed(2)); // 秒単位（数値型）
-    }
-    sessionTimestamps.set(event.sessionId, event.timestamp);
-
     // source を判定（API経由かどうか）
     const source = managedProcesses.has(event.sessionId) ? 'api' : 'cli';
 

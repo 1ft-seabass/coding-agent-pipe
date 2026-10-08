@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-10-08
+
+### Fixed
+- A `watchDir` that does not exist is no longer created. The server logs a warning once, keeps running, and starts watching when the directory appears (checked every 5 seconds). Before, a typo in `watchDir` silently created a stray directory. A `watchDir` that exists behaves as before
+- Subagent events now carry `projectPath`, `projectName`, and `git`, like the other events. The project of a subagent file (under `<project>/<sessionId>/subagents/`) was looked up one directory too low and never found. The same fix applies to REST: with `excludeAgents=false`, `GET /sessions` now shows `projectPath` and `projectName` for subagent sessions, and `GET /projects` counts them in their project. Default listings are unchanged
+- With several `subscribers`, `responseTime` in `assistant-response-completed` is now the same for every subscriber. It was `0` for the second and later ones, because the first subscriber updated the last timestamp before they were handled
+- MQTT commands that send to an existing session (`sessionId` given) now use `projectPath` as the working directory and put it in the events, like the REST API and like MQTT commands that start a new session. It was ignored, so the agent started in the directory the server was started from
+- `cancel` now really moves on to SIGTERM when the process has not ended after SIGINT and `send.cancelTimeoutMs`. It was never sent, because the code checked Node's `killed` flag, which becomes true as soon as SIGINT is sent
+- The same mistake in three more places: `alive` in `GET /processes` stays `true` while the process is really running (it turned `false` right after a `cancel`), and `DELETE /processes/:sessionId` and `DELETE /processes` now send SIGTERM to a process that already received SIGINT from a `cancel` (they skipped it and reported `killed: false`)
+
+### Changed
+- **From 0.1.0, keeping every behavior identical to claude-code-pipe is no longer a goal.** The weaknesses inherited from it are fixed one by one and recorded here as intended changes (see Fixed and Changed). The weaknesses that remain are listed under "Known behaviors" in DETAILS
+- `~` in `watchDir` is now expanded with `os.homedir()` instead of `process.env.HOME`, so it no longer becomes an empty string when `HOME` is not set (for example on native Windows)
+- The `apiToken` check now compares tokens in constant time (SHA-256 digests with `crypto.timingSafeEqual`), so the comparison time no longer depends on how many leading characters match. Accepted and rejected tokens are unchanged
+
 ## [0.0.2] - 2026-10-04
 
 ### Added

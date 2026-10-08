@@ -6,7 +6,7 @@
  * プロトタイプ実装。
  */
 
-import { getManagedProcess, processEvents } from './process.js';
+import { getManagedProcess, isRunning, processEvents } from './process.js';
 
 /**
  * セッションのプロセスをキャンセル
@@ -44,7 +44,7 @@ function cancel(sessionId, cancelTimeoutMs = 3000) {
 
   // タイムアウト後に SIGTERM を送る
   setTimeout(() => {
-    if (!proc.killed) {
+    if (isRunning(proc)) {
       console.log(`[canceller] Process still alive, sending SIGTERM to pid=${pid}`);
       try {
         proc.kill('SIGTERM');

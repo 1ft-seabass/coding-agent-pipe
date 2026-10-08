@@ -6,6 +6,21 @@
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-10-08
+
+### Fixed
+- 存在しない `watchDir` を、作らないようにした。警告を 1 回出して、起動は続け、ディレクトリが現れたら監視を始める(5 秒おきに確認する)。これまでは、`watchDir` のタイプミスで、余計なディレクトリが黙って作られていた。存在する `watchDir` の動きは、変わらない
+- サブエージェントのイベントにも、ほかのイベントと同じく、`projectPath`・`projectName`・`git` が付くようにした。サブエージェントのファイル(`<プロジェクト>/<sessionId>/subagents/` の下)のプロジェクトを、1 つ下のディレクトリで探していて、見つからなかった。REST にも同じ修正が効く。`excludeAgents=false` のとき、`GET /sessions` はサブエージェントのセッションの `projectPath`・`projectName` を返し、`GET /projects` はそれを、所属するプロジェクトに数える。既定の一覧は変わらない
+- `subscribers` が複数のとき、`assistant-response-completed` の `responseTime` が、すべての subscriber で同じ値になるようにした。これまでは、2 件目以降で `0` になっていた(1 件目の処理が、先に最後のタイムスタンプを更新するため)
+- MQTT で、既存のセッションに送るコマンド(`sessionId` つき)が、`projectPath` を作業ディレクトリとして使い、イベントにも載せるようになった(REST API や、MQTT の新規セッションの開始と同じ)。これまでは無視されていて、エージェントは、サーバーを起動した場所で起動していた
+- `cancel` が、SIGINT のあと `send.cancelTimeoutMs` を過ぎても終わらないプロセスに、実際に SIGTERM を送るようになった。これまでは、Node の `killed` を見ていて、SIGINT を送った時点で真になるため、SIGTERM が送られなかった
+- 同じ誤りが、ほかの 3 か所にもあったので、あわせて直した。`GET /processes` の `alive` は、実際に動いている間は `true` のままになる(これまでは、`cancel` の直後に `false` になった)。`DELETE /processes/:sessionId` と `DELETE /processes` は、`cancel` で SIGINT を受けたプロセスにも、SIGTERM を送る(これまでは、飛ばして、`killed: false` と返していた)
+
+### Changed
+- **0.1.0 から、claude-code-pipe とすべての挙動を同じに保つことは、目標ではなくなった。** 引き継いだ弱点を、1 つずつ直し、意図した変更として、ここに記録する(Fixed と Changed を参照)。残っている弱点は、DETAILS の「既知の挙動」にある
+- `watchDir` の `~` の展開を、`process.env.HOME` から `os.homedir()` に変更。`HOME` が未設定の環境(Windows ネイティブなど)でも、`~` が空文字にならない
+- `apiToken` の確認で、トークンを定数時間で比べるようにした(SHA-256 のダイジェストにそろえて `crypto.timingSafeEqual`)。先頭の何文字が合っているかで、比較の時間が変わらなくなる。通るトークンと、通らないトークンは、変わらない
+
 ## [0.0.2] - 2026-10-04
 
 ### Added

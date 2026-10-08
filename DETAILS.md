@@ -84,7 +84,7 @@ Copy `config.example.json` to `config.json` and edit it. (`config.json` is read 
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
 | `engine` | string | No | `"claude-code"` | The coding agent to handle. Unset or empty means `claude-code`. An unknown value makes the process exit with an error at startup |
-| `watchDir` | string | Yes | - | Directory to watch for session files (e.g., `~/.claude/projects`). `~` is expanded. **If it does not exist, the server tries to create it** (if it cannot be created, a warning is logged and startup continues) |
+| `watchDir` | string | Yes | - | Directory to watch for session files (e.g., `~/.claude/projects`). `~` is expanded. **If it does not exist, the server does not create it**: it logs a warning once, keeps running, and starts watching when the directory appears (checked every 5 seconds) |
 | `port` | number | No | `3100` | Port number for the server |
 | `apiToken` | string | No | `""` | API authentication token. If set, all requests must include the `Authorization: Bearer TOKEN` header |
 | `projectTitle` | string | No | `null` | User-defined project title (included in Webhook payloads and in `GET /info`) |
@@ -258,7 +258,7 @@ curl http://localhost:3100/health
 ```json
 {
   "status": "ok",
-  "version": "0.0.2",
+  "version": "0.1.0",
   "uptime": 123.456
 }
 ```
@@ -286,7 +286,7 @@ curl http://localhost:3100/version
 ```json
 {
   "name": "coding-agent-pipe",
-  "version": "0.0.2",
+  "version": "0.1.0",
   "description": "A pipe for coding agent CLI input/output using JSONL and Hono"
 }
 ```
@@ -311,7 +311,7 @@ curl http://localhost:3100/info
 
 ```json
 {
-  "version": "0.0.2",
+  "version": "0.1.0",
   "os": "linux",
   "communicationMode": "bidirectional",
   "backendType": "claude_code",
@@ -760,7 +760,7 @@ The Webhook `cancel-initiated` is delivered, and `process-exit` is delivered whe
 
 **Error (`404`):** `{ "error": "Session not found or not managed" }` (a session this pipe does not manage, or one that has already ended).
 
-> **Note:** The mechanism that moves on to SIGTERM when the process has not ended after SIGINT and `send.cancelTimeoutMs` has elapsed **does not work because of a known defect** (behavior inherited from claude-code-pipe). To stop a process reliably, use [`DELETE /processes/:sessionId`](#delete-processessessionid).
+> **Note:** `cancel` sends SIGINT first. If the process has not ended after `send.cancelTimeoutMs`, it moves on to SIGTERM (this step did not work before 0.1.0; see the [CHANGELOG](./CHANGELOG.md)). To stop a process right away, use [`DELETE /processes/:sessionId`](#delete-processessessionid).
 
 ### Management
 
@@ -1105,7 +1105,7 @@ A Webhook receives JSON with the following structure by `POST` (`Content-Type: a
 | `pipeApp` | string | Always `"coding-agent-pipe"`. claude-code-pipe does not send it (when absent, it can be treated as `claude-code-pipe`) |
 | `engine` | string | Which coding agent it is (e.g., `"claude-code"`). claude-code-pipe does not send it (when absent, it can be treated as `claude-code`) |
 | `mqttCommandTopic` | string | `config.mqtt.commandTopic` (only when set) |
-| `projectPath`, `projectName` | string | Path and name of the session's project (derived from the location of the session file; **not attached to subagent events**) |
+| `projectPath`, `projectName` | string | Path and name of the session's project (derived from the location of the session file; for a subagent, the project that its session belongs to) |
 | `projectTitle` | string | `config.projectTitle` (only when set) |
 
 #### Message events (`user-message-received`, `assistant-response-completed`)
@@ -1158,7 +1158,7 @@ Message events are emitted by **watching the session files**, so they also cover
 ```json
 {
   "type": "user-message-received",
-  "version": "0.0.2",
+  "version": "0.1.0",
   "sessionId": "11111111-1111-4111-8111-111111111111",
   "timestamp": "2026-09-01T00:33:20.000Z",
   "cwdPath": "/home/user/workspace/repos/coding-agent-pipe",
@@ -1185,7 +1185,7 @@ Message events are emitted by **watching the session files**, so they also cover
 ```json
 {
   "type": "assistant-response-completed",
-  "version": "0.0.2",
+  "version": "0.1.0",
   "sessionId": "11111111-1111-4111-8111-111111111111",
   "timestamp": "2026-09-01T00:33:21.000Z",
   "cwdPath": "/home/user/workspace/repos/coding-agent-pipe",
@@ -1221,7 +1221,7 @@ Message events are emitted by **watching the session files**, so they also cover
 ```json
 {
   "type": "session-started",
-  "version": "0.0.2",
+  "version": "0.1.0",
   "sessionId": "55555555-5555-4555-8555-555555555555",
   "timestamp": "2026-09-01T00:00:00.000Z",
   "cwdPath": "/home/user/workspace/repos/coding-agent-pipe",
@@ -1244,7 +1244,7 @@ Message events are emitted by **watching the session files**, so they also cover
 ```json
 {
   "type": "process-exit",
-  "version": "0.0.2",
+  "version": "0.1.0",
   "sessionId": "55555555-5555-4555-8555-555555555555",
   "timestamp": "2026-09-01T00:00:05.000Z",
   "cwdPath": "/home/user/workspace/repos/coding-agent-pipe",
@@ -1317,11 +1317,7 @@ The following behaviors are inherited from claude-code-pipe and are unchanged fo
 | The prompt limit is about 128KB. With many `\` `"` `` ` `` `$`, escaping doubles the size and the limit becomes about 64KB | `500` (no explanation of the reason) | Shorten the prompt. Pass long content as an attachment (`POST /attachments`) and write the path in the prompt |
 | Sending twice in a row to the same session | The first process is dropped from management and cannot be stopped by `DELETE /processes` or `cancel` | Send the next message after the previous send has finished |
 | If a single line is written in pieces with a gap of 100ms or more, that line is lost | Rarely, a message event is missing | (Depends on how the agent writes) |
-| With multiple `subscribers`, `responseTime` is 0 for the second and later ones | `responseTime` in `assistant-response-completed` is inaccurate | Do not rely on `responseTime` on the receiver side |
-| Subagent events have no `projectPath` or `projectName` | They cannot be tied to a project | Handle them by `sessionId` and `isSubagent` |
-| If `watchDir` does not exist, the server tries to create it | A typo can create a stray directory. If it cannot be created, only a warning is logged and startup continues | Check `watchDir` |
 | If a connection whose request has stalled exists, shutdown (SIGINT / SIGTERM) does not finish | The process does not exit | Wait for the connection to close, or use `kill -9` |
-| The mechanism that moves on to SIGTERM after SIGINT in `cancel` does not work | The process may not stop even after `cancelTimeoutMs` | Stop it with `DELETE /processes/:sessionId` |
 | Shutting down the server does not stop the child processes (agents) it started | The agents may keep running after shutdown | Stop them with `DELETE /processes` before shutting down |
 
 ---
@@ -1404,7 +1400,7 @@ ls ~/.claude/projects
 
 **Symptom:** The process does not stop even after `POST /sessions/:id/cancel`.
 
-**Solution:** `cancel` sends SIGINT first. The mechanism that then moves on to SIGTERM **does not work because of a known defect** (behavior inherited from claude-code-pipe). To stop a process reliably, use `DELETE /processes/:sessionId`. Also, `cancel` and `DELETE /processes` target only processes this pipe started (you can check them with `GET /processes`).
+**Solution:** `cancel` sends SIGINT first, and moves on to SIGTERM if the process has not ended after `send.cancelTimeoutMs` (this step did not work before 0.1.0; see the [CHANGELOG](./CHANGELOG.md)). To stop a process right away, use `DELETE /processes/:sessionId`. Also, `cancel` and `DELETE /processes` target only processes this pipe started (you can check them with `GET /processes`).
 
 ---
 

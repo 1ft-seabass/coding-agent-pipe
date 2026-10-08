@@ -78,7 +78,7 @@ function setupMqttReceiver(config, adapter) {
 
     try {
       if (sessionId) {
-        const result = await sendToSession(adapter.spawn, sessionId, prompt, { allowedTools, model, projectPath: null, ...callbacks });
+        const result = await sendToSession(adapter.spawn, sessionId, prompt, { cwd: projectPath, projectPath, allowedTools, model, ...callbacks });
         console.log(`[mqtt] Sent to existing session: sessionId=${result.sessionId}`);
       } else {
         const result = await startNewSession(adapter.spawn, prompt, { cwd: projectPath, projectPath, allowedTools, model, ...callbacks });

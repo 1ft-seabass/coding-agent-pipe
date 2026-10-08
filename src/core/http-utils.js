@@ -6,7 +6,17 @@
  *  - parseSize:       '10mb' のようなサイズ表記をバイト数にする(bytes の挙動)
  *  - jsonBodyParser:  express.json() 相当(JSON 以外・空ボディは {}、不正な JSON は 400)
  *  - BadRequestError: ボディが不正なときに投げる(app.onError で 400 にする)
+ *  - safeEqual:       文字列を、定数時間で比べる(API トークンの比較用。長さの違いも、時間に出さない)
  */
+
+import crypto from 'node:crypto';
+
+/** 2 つの文字列が等しいかを、定数時間で比べる(SHA-256 にそろえてから、timingSafeEqual) */
+function safeEqual(a, b) {
+  const ha = crypto.createHash('sha256').update(String(a)).digest();
+  const hb = crypto.createHash('sha256').update(String(b)).digest();
+  return crypto.timingSafeEqual(ha, hb);
+}
 
 /** クエリの値を返す。重複キーは配列、無ければ undefined(Express の req.query と同じ) */
 function query(c, name) {
@@ -52,4 +62,4 @@ function jsonBodyParser() {
   };
 }
 
-export { query, parseSize, jsonBodyParser, BadRequestError };
+export { query, parseSize, jsonBodyParser, BadRequestError, safeEqual };

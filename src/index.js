@@ -18,7 +18,7 @@ import { setupSubscribers } from './core/deliver.js';
 import { getManagedProcesses, processEvents } from './core/process.js';
 import { cancel } from './core/canceller.js';
 import { setupMqttReceiver } from './core/mqtt-receiver.js';
-import { parseSize, jsonBodyParser, BadRequestError } from './core/http-utils.js';
+import { parseSize, jsonBodyParser, BadRequestError, safeEqual } from './core/http-utils.js';
 
 // 設定を読み込む
 let config;
@@ -67,7 +67,7 @@ async function authMiddleware(c, next) {
 
   const token = authHeader.substring(7); // "Bearer " を除去
 
-  if (token !== apiToken) {
+  if (!safeEqual(token, apiToken)) {
     return c.json({ error: 'Unauthorized: Invalid token' }, 401);
   }
 

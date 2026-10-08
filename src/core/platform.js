@@ -3,6 +3,7 @@
  */
 
 import fs from 'node:fs';
+import os from 'node:os';
 
 /**
  * Windows (non-WSL) 環境かどうかを判定
@@ -34,9 +35,9 @@ function getOsInfo() {
   return 'linux';
 }
 
-/** 先頭の "~" をホームディレクトリに展開する */
+/** 先頭の "~" をホームディレクトリに展開する(os.homedir()。HOME が未設定の環境でも、空にならない) */
 function expandHome(p) {
-  return p.replace(/^~/, process.env.HOME || '');
+  return p.replace(/^~/, () => os.homedir());
 }
 
 export { isWindowsNonWSL, getOsInfo, expandHome };

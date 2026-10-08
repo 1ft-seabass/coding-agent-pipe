@@ -89,7 +89,7 @@ You should see:
 ```
 [index] Logging to: /path/to/coding-agent-pipe/logs/server.log
 [subscribers] No subscribers configured
-coding-agent-pipe v0.0.2 listening on port 3100
+coding-agent-pipe v0.1.0 listening on port 3100
 [watcher] Starting to watch: /home/user/.claude/projects
 [watcher] Watching started
 ```

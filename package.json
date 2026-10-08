@@ -1,6 +1,6 @@
 {
   "name": "coding-agent-pipe",
-  "version": "0.0.2",
+  "version": "0.1.0",
   "description": "A pipe for coding agent CLI input/output using JSONL and Hono",
   "type": "module",
   "main": "src/index.js",

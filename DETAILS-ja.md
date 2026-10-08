@@ -84,7 +84,7 @@ coding-agent-pipe は、コーディングエージェントのセッション�
 | フィールド | 型 | 必須 | デフォルト | 説明 |
 |-------|------|----------|---------|-------------|
 | `engine` | string | No | `"claude-code"` | 扱うコーディングエージェント。未指定・空文字は `claude-code`。未知の値は、起動時にエラー終了 |
-| `watchDir` | string | Yes | - | セッションファイルの監視ディレクトリ(例: `~/.claude/projects`)。`~` は展開される。**存在しない場合は、作ろうとする**(作れなければ警告を出して起動は続く) |
+| `watchDir` | string | Yes | - | セッションファイルの監視ディレクトリ(例: `~/.claude/projects`)。`~` は展開される。**存在しない場合は、作らない**: 警告を 1 回出して、起動は続け、ディレクトリが現れたら監視を始める(5 秒おきに確認する) |
 | `port` | number | No | `3100` | サーバーのポート番号 |
 | `apiToken` | string | No | `""` | API 認証トークン。設定すると、全リクエストに `Authorization: Bearer TOKEN` ヘッダーが必要 |
 | `projectTitle` | string | No | `null` | ユーザー定義のプロジェクトタイトル(Webhook ペイロードと `GET /info` に含まれる) |
@@ -258,7 +258,7 @@ curl http://localhost:3100/health
 ```json
 {
   "status": "ok",
-  "version": "0.0.2",
+  "version": "0.1.0",
   "uptime": 123.456
 }
 ```
@@ -286,7 +286,7 @@ curl http://localhost:3100/version
 ```json
 {
   "name": "coding-agent-pipe",
-  "version": "0.0.2",
+  "version": "0.1.0",
   "description": "A pipe for coding agent CLI input/output using JSONL and Hono"
 }
 ```
@@ -311,7 +311,7 @@ curl http://localhost:3100/info
 
 ```json
 {
-  "version": "0.0.2",
+  "version": "0.1.0",
   "os": "linux",
   "communicationMode": "bidirectional",
   "backendType": "claude_code",
@@ -760,7 +760,7 @@ Webhook の `cancel-initiated` が配信され、プロセスが終わると `pr
 
 **エラー(`404`):** `{ "error": "Session not found or not managed" }`(この pipe が管理していないセッション、または、すでに終わったセッション)。
 
-> **注意:** SIGINT のあと、`send.cancelTimeoutMs` が過ぎても終わらないときに、SIGTERM に進む仕組みは、**既知の不具合で動きません**(claude-code-pipe から引き継いだ挙動)。確実に止めるときは、[`DELETE /processes/:sessionId`](#delete-processessessionid) を使ってください。
+> **注意:** `cancel` は、まず SIGINT を送ります。`send.cancelTimeoutMs` が過ぎても終わらないときは、SIGTERM に進みます(この段階は、0.1.0 より前は動いていませんでした。[CHANGELOG](./CHANGELOG-ja.md) を参照)。すぐに止めたいときは、[`DELETE /processes/:sessionId`](#delete-processessessionid) を使ってください。
 
 ### Management(管理)
 
@@ -1105,7 +1105,7 @@ Webhook は、次の構造の JSON を、`POST`(`Content-Type: application/json`
 | `pipeApp` | string | 常に `"coding-agent-pipe"`。claude-code-pipe は送らない(無ければ `claude-code-pipe` とみなせる) |
 | `engine` | string | どのコーディングエージェントか(例: `"claude-code"`)。claude-code-pipe は送らない(無ければ `claude-code` とみなせる) |
 | `mqttCommandTopic` | string | `config.mqtt.commandTopic`(設定した場合のみ) |
-| `projectPath`・`projectName` | string | セッションのプロジェクトのパスと名前(セッションファイルの場所から割り出す。**サブエージェントのイベントには付かない**) |
+| `projectPath`・`projectName` | string | セッションのプロジェクトのパスと名前(セッションファイルの場所から割り出す。サブエージェントは、そのセッションが属するプロジェクト) |
 | `projectTitle` | string | `config.projectTitle`(設定した場合のみ) |
 
 #### メッセージ系(`user-message-received`、`assistant-response-completed`)
@@ -1158,7 +1158,7 @@ Webhook は、次の構造の JSON を、`POST`(`Content-Type: application/json`
 ```json
 {
   "type": "user-message-received",
-  "version": "0.0.2",
+  "version": "0.1.0",
   "sessionId": "11111111-1111-4111-8111-111111111111",
   "timestamp": "2026-09-01T00:33:20.000Z",
   "cwdPath": "/home/user/workspace/repos/coding-agent-pipe",
@@ -1185,7 +1185,7 @@ Webhook は、次の構造の JSON を、`POST`(`Content-Type: application/json`
 ```json
 {
   "type": "assistant-response-completed",
-  "version": "0.0.2",
+  "version": "0.1.0",
   "sessionId": "11111111-1111-4111-8111-111111111111",
   "timestamp": "2026-09-01T00:33:21.000Z",
   "cwdPath": "/home/user/workspace/repos/coding-agent-pipe",
@@ -1221,7 +1221,7 @@ Webhook は、次の構造の JSON を、`POST`(`Content-Type: application/json`
 ```json
 {
   "type": "session-started",
-  "version": "0.0.2",
+  "version": "0.1.0",
   "sessionId": "55555555-5555-4555-8555-555555555555",
   "timestamp": "2026-09-01T00:00:00.000Z",
   "cwdPath": "/home/user/workspace/repos/coding-agent-pipe",
@@ -1244,7 +1244,7 @@ Webhook は、次の構造の JSON を、`POST`(`Content-Type: application/json`
 ```json
 {
   "type": "process-exit",
-  "version": "0.0.2",
+  "version": "0.1.0",
   "sessionId": "55555555-5555-4555-8555-555555555555",
   "timestamp": "2026-09-01T00:00:05.000Z",
   "cwdPath": "/home/user/workspace/repos/coding-agent-pipe",
@@ -1317,11 +1317,7 @@ Webhook は、次の構造の JSON を、`POST`(`Content-Type: application/json`
 | プロンプトの上限は約 128KB。`\` `"` `` ` `` `$` が多いと、エスケープで 2 倍になり、約 64KB | `500`(理由の説明なし) | プロンプトを短くする。長い内容は、添付(`POST /attachments`)で渡して、パスをプロンプトに書く |
 | 同じセッションに、続けて 2 回送る | 最初のプロセスが管理から外れ、`DELETE /processes`・`cancel` で止められない | 前の送信が終わってから、次を送る |
 | 1 行の書き込みが、100ms 以上空いて分割されると、その行を失う | まれに、メッセージ系のイベントが欠ける | (エージェント側の書き込みの仕方に依存) |
-| `subscribers` が複数あると、2 件目以降の `responseTime` が 0 になる | `assistant-response-completed` の `responseTime` が不正確 | 受け手で `responseTime` に依存しない |
-| サブエージェントのイベントには、`projectPath`・`projectName` が付かない | プロジェクトに紐づけられない | `sessionId` と `isSubagent` で扱う |
-| `watchDir` が存在しなければ、作ろうとする | タイプミスで、余計なディレクトリができる。作れなければ、ログに警告だけが出て、起動は続く | `watchDir` を確認する |
 | リクエストが途中で止まった接続があると、停止(SIGINT / SIGTERM)が終わらない | プロセスが終了しない | 接続が切れるのを待つか、`kill -9` |
-| `cancel` で SIGINT のあと、SIGTERM に進む仕組みが動かない | `cancelTimeoutMs` を過ぎても、止まらないことがある | `DELETE /processes/:sessionId` で止める |
 | サーバーの停止では、起動した子プロセス(エージェント)は止まらない | 停止後も、エージェントが動き続けることがある | 停止の前に `DELETE /processes` で止める |
 
 ---
@@ -1404,7 +1400,7 @@ ls ~/.claude/projects
 
 **症状:** `POST /sessions/:id/cancel` を送っても、プロセスが止まらない。
 
-**解決策:** `cancel` は、まず SIGINT を送ります。そのあと SIGTERM に進む仕組みが、**既知の不具合で動きません**(claude-code-pipe から引き継いだ挙動)。確実に止めるには、`DELETE /processes/:sessionId` を使います。また、`cancel` と `DELETE /processes` が対象にするのは、この pipe が起動したプロセスだけです(`GET /processes` で確認できます)。
+**解決策:** `cancel` は、まず SIGINT を送り、`send.cancelTimeoutMs` が過ぎても終わらないときは、SIGTERM に進みます(この段階は、0.1.0 より前は動いていませんでした。[CHANGELOG](./CHANGELOG-ja.md) を参照)。すぐに止めるには、`DELETE /processes/:sessionId` を使います。また、`cancel` と `DELETE /processes` が対象にするのは、この pipe が起動したプロセスだけです(`GET /processes` で確認できます)。
 
 ---
 

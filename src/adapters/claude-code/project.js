@@ -29,7 +29,11 @@ const projectPathCache = new Map();
  */
 function extractProjectPath(jsonlFilePath) {
   try {
-    const dir = path.dirname(jsonlFilePath);
+    let dir = path.dirname(jsonlFilePath);
+    // サブエージェントのファイルは <プロジェクト>/<sessionId>/subagents/ の下にある。プロジェクトのディレクトリは、2 つ上
+    if (path.basename(dir) === 'subagents') {
+      dir = path.dirname(path.dirname(dir));
+    }
     const projectDirName = path.basename(dir);
     const isWindows = isWindowsNonWSL();
 

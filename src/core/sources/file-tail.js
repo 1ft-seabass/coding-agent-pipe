@@ -12,6 +12,9 @@ import { EventEmitter } from 'node:events';
 import chokidar from 'chokidar';
 import { expandHome } from '../platform.js';
 
+/** watchDir が存在しないとき、現れるのを待つ確認の間隔(ミリ秒) */
+const WAIT_INTERVAL_MS = 5000;
+
 class FileTailSource extends EventEmitter {
   /**
    * @param {object} options
@@ -19,14 +22,17 @@ class FileTailSource extends EventEmitter {
    * @param {string} options.extension - 監視するファイルの拡張子(例: '.jsonl')
    * @param {(line: string) => object|null} options.parse - 1行を正規化イベントに変換する
    * @param {(filePath: string) => string|null} [options.sessionIdFromPath] - sessionId が無い行の補完用
+   * @param {number} [options.waitIntervalMs] - watchDir が存在しないとき、現れるのを待つ確認の間隔(既定 5000)
    */
-  constructor({ watchDir, extension, parse, sessionIdFromPath }) {
+  constructor({ watchDir, extension, parse, sessionIdFromPath, waitIntervalMs }) {
     super();
     this.watchDir = expandHome(watchDir);
     this.extension = extension;
     this.parse = parse;
     this.sessionIdFromPath = sessionIdFromPath || (() => null);
     this.filePositions = new Map(); // ファイルパス → 最終読み込み位置
+    this.waitIntervalMs = waitIntervalMs || WAIT_INTERVAL_MS;
+    this.waitTimer = null;
     this.watcher = null;
   }
 
@@ -119,17 +125,40 @@ class FileTailSource extends EventEmitter {
   async start() {
     console.log(`[watcher] Starting to watch: ${this.watchDir}`);
 
-    // watchDir が存在しない場合は作成を試みる
-    try {
-      await fs.promises.mkdir(this.watchDir, { recursive: true });
-    } catch (error) {
-      console.warn(`[watcher] Could not create watch directory: ${error.message}`);
+    // watchDir が存在しない場合は、作らない(タイプミスで余計なディレクトリができるため)。警告を 1 回出して、現れるのを待つ
+    // (chokidar は、存在しないディレクトリの下を監視しても、あとからできたものを拾えないので、現れてから監視を始める)
+    if (!fs.existsSync(this.watchDir)) {
+      console.warn(`[watcher] Watch directory does not exist: ${this.watchDir} (not creating it; waiting for it to appear)`);
+      this.waitTimer = setInterval(() => {
+        if (!fs.existsSync(this.watchDir)) return;
+        clearInterval(this.waitTimer);
+        this.waitTimer = null;
+        console.log(`[watcher] Watch directory appeared: ${this.watchDir}`);
+        // 起動後にできたものなので、中のファイルは新規として、先頭から読む
+        this.beginWatching({ readExistingFromStart: true }).catch((error) => {
+          console.error('[watcher] Failed to start watching:', error.message);
+        });
+      }, this.waitIntervalMs);
+      this.waitTimer.unref();
+      return;
     }
 
-    // 既存ファイルの末尾位置を記録（過去ログは読まない）
-    const existingFiles = await this.findExistingFiles();
-    for (const file of existingFiles) {
-      await this.recordCurrentPosition(file);
+    await this.beginWatching({ readExistingFromStart: false });
+  }
+
+  /**
+   * chokidar での監視を始める(watchDir が存在するとき)
+   * @param {object} options
+   * @param {boolean} options.readExistingFromStart - 既存のファイルも先頭から読む(起動後に watchDir ができたとき)。
+   *   false なら、既存のファイルの末尾位置を記録して、過去ログは読まない
+   */
+  async beginWatching({ readExistingFromStart }) {
+    if (!readExistingFromStart) {
+      // 既存ファイルの末尾位置を記録（過去ログは読まない）
+      const existingFiles = await this.findExistingFiles();
+      for (const file of existingFiles) {
+        await this.recordCurrentPosition(file);
+      }
     }
 
     // chokidar で監視開始
@@ -197,6 +226,10 @@ class FileTailSource extends EventEmitter {
    * 監視を停止
    */
   async stop() {
+    if (this.waitTimer) {
+      clearInterval(this.waitTimer);
+      this.waitTimer = null;
+    }
     if (this.watcher) {
       await this.watcher.close();
       console.log('[watcher] Watching stopped');
