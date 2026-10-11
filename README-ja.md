@@ -10,7 +10,7 @@
 
 コーディングエージェントの JSONL セッションファイルを監視し、REST API で操作を提供し、セッションイベントを Webhook で配信します。プログラムからエージェントにプロンプトを送信し、応答が完了したらイベントを受け取ることができます。
 
-- 1 プロセス = 1 エンジン(`config.engine` で選択)。今使えるエンジンは `claude-code` です
+- 1 プロセス = 1 エンジン(`config.engine` で選択)。今使えるエンジンは `claude-code` と `codex`(OpenAI の Codex CLI。[DETAILS: Codex を使う](./DETAILS-ja.md#codex-を使う)を参照)です
 
 ## できること・できないこと・やらないこと
 
@@ -50,7 +50,7 @@
 | MQTT コマンドチャネル | ✅ | ✅ | ✅ | ❌(無効) |
 
 - Node.js 20 以上が必要です。
-- Linux・macOS・WSL では、エージェントを `script` コマンド(PTY)経由で起動します。
+- `claude-code` では、Linux・macOS・WSL で、エージェントを `script` コマンド(PTY)経由で起動します。`codex` は、直接起動します(PTY は使いません)。
 - 動作の検証は、Linux で行っています。
 
 ## クイックスタート
@@ -89,7 +89,7 @@ npm start
 ```
 [index] Logging to: /path/to/coding-agent-pipe/logs/server.log
 [subscribers] No subscribers configured
-coding-agent-pipe v0.1.0 listening on port 3100
+coding-agent-pipe v0.2.0 listening on port 3100
 [watcher] Starting to watch: /home/user/.claude/projects
 [watcher] Watching started
 ```
@@ -174,7 +174,7 @@ curl -X POST http://localhost:3100/sessions/SESSION_ID/send \
   -d '{"prompt": "続きをお願いします", "projectPath": "/path/to/project"}'
 ```
 
-> **注意**: Send Mode は、エージェントを、あなたの権限で起動します。`allowedTools` で、使えるツールを絞ることを、おすすめします。`dangerouslySkipPermissions` は、隔離された環境でだけ使ってください。詳しくは、[DETAILS-ja.md のセキュリティに関する注意事項](./DETAILS-ja.md#セキュリティに関する注意事項)を参照してください。
+> **注意**: Send Mode は、エージェントを、あなたの権限で起動します。`allowedTools` で、使えるツールを絞ることを、おすすめします(`codex` では効きません)。`dangerouslySkipPermissions` は、隔離された環境でだけ使ってください。詳しくは、[DETAILS-ja.md のセキュリティに関する注意事項](./DETAILS-ja.md#セキュリティに関する注意事項)を参照してください。
 
 ## 基本の設定
 

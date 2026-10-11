@@ -20,7 +20,7 @@ function availableEngines() {
 
 /**
  * @param {string} engine - エンジン名(例: 'claude-code')
- * @param {object} config - 設定オブジェクト
+ * @param {object} config - 設定オブジェクト(config.watchDir が無く、adapter が defaultWatchDir を持つときは、それを入れる)
  * @returns {Promise<object>} adapter
  */
 async function loadAdapter(engine, config) {
@@ -31,6 +31,10 @@ async function loadAdapter(engine, config) {
     throw new Error(`Unknown engine: "${engine}". Available: ${availableEngines().join(', ')}`);
   }
   const mod = await import(`./${engine}/index.js`);
+  // 観測元・REST・adapter が同じ置き場を見るよう、adapter を作る前に config へ入れる
+  if (!config.watchDir && mod.defaultWatchDir) {
+    config.watchDir = mod.defaultWatchDir;
+  }
   return mod.default(config);
 }
 

@@ -140,6 +140,12 @@ function startNewSession(driver, prompt, options = {}) {
 
     // プロセス終了時の処理
     proc.on('exit', (code, signal) => {
+      // 終わったプロセスについて、あとから session-timeout が出ないよう、起動タイムアウトを止める
+      if (sessionStartTimeout) {
+        clearTimeout(sessionStartTimeout);
+        sessionStartTimeout = null;
+      }
+
       const sessionId = actualSessionId || tempSessionId;
       console.log(`[process] Process exited: sessionId=${sessionId}, pid=${pid}, code=${code}, signal=${signal}`);
 
@@ -302,6 +308,12 @@ function sendToSession(driver, sessionId, prompt, options = {}) {
 
     // プロセス終了時の処理
     proc.on('exit', (code, signal) => {
+      // 終わったプロセスについて、あとから session-timeout が出ないよう、起動タイムアウトを止める
+      if (sendTimeout) {
+        clearTimeout(sendTimeout);
+        sendTimeout = null;
+      }
+
       console.log(`[process] Process exited: sessionId=${sessionId}, pid=${pid}, code=${code}, signal=${signal}`);
 
       // イベント発行
@@ -327,6 +339,12 @@ function sendToSession(driver, sessionId, prompt, options = {}) {
     // プロセス起動エラー
     proc.on('error', (err) => {
       console.error(`[process] Failed to send to session: ${err.message}`);
+
+      // 起動エラーのあとに session-timeout が出ないよう、起動タイムアウトを止める
+      if (sendTimeout) {
+        clearTimeout(sendTimeout);
+        sendTimeout = null;
+      }
 
       // session-error イベント発行
       processEvents.emit('session-error', {

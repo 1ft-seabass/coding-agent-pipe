@@ -23,7 +23,7 @@ coding-agent-pipe の完全なドキュメント
 
 coding-agent-pipe は、コーディングエージェントのセッションファイル(JSONL)を監視して、Webhook で配信し、REST API(と MQTT)で、セッションの読み取り・送信・キャンセルを行う、薄い橋渡しです。
 
-- **1 プロセス = 1 エンジン**: 起動時に `config.engine` で、どのコーディングエージェントを扱うかを 1 つ選びます。今は `claude-code` だけです(未指定、空文字も `claude-code`)。別のエンジンは、別のプロセスとして立てます。
+- **1 プロセス = 1 エンジン**: 起動時に `config.engine` で、どのコーディングエージェントを扱うかを 1 つ選びます。今は `claude-code` と `codex` です(未指定、空文字は `claude-code`)。別のエンジンは、別のプロセスとして立てます。[Codex を使う](#codex-を使う)を参照。
 - claude-code-pipe(0.9.x)の、API と Webhook の出力を引き継いでいます。claude-code-pipe に対して、次のものを**追加**しています。
   - Webhook と `GET /info` の `pipeApp`(どのアプリから来たか。常に `"coding-agent-pipe"`)と `engine`(どのエージェントか。例: `"claude-code"`)。claude-code-pipe はこの 2 つを送りません。受け手は、無ければ `pipeApp` を `claude-code-pipe`、`engine` を `claude-code` とみなせます。
 - claude-code-pipe の文書に載っていなかったルート(`GET /health`、`GET /managed`)や、項目(`GET /processes` の `alive` など)も、ここに載せています(機能は claude-code-pipe にもありました)。
@@ -83,8 +83,8 @@ coding-agent-pipe は、コーディングエージェントのセッション�
 
 | フィールド | 型 | 必須 | デフォルト | 説明 |
 |-------|------|----------|---------|-------------|
-| `engine` | string | No | `"claude-code"` | 扱うコーディングエージェント。未指定・空文字は `claude-code`。未知の値は、起動時にエラー終了 |
-| `watchDir` | string | Yes | - | セッションファイルの監視ディレクトリ(例: `~/.claude/projects`)。`~` は展開される。**存在しない場合は、作らない**: 警告を 1 回出して、起動は続け、ディレクトリが現れたら監視を始める(5 秒おきに確認する) |
+| `engine` | string | No | `"claude-code"` | 扱うコーディングエージェント(`claude-code`、`codex`)。未指定・空文字は `claude-code`。未知の値は、起動時にエラー終了 |
+| `watchDir` | string | Yes(`engine` が `codex` なら No) | - | セッションファイルの監視ディレクトリ(例: `~/.claude/projects`)。`codex` で省略すると `~/.codex/sessions`。`~` は展開される。**存在しない場合は、作らない**: 警告を 1 回出して、起動は続け、ディレクトリが現れたら監視を始める(5 秒おきに確認する) |
 | `port` | number | No | `3100` | サーバーのポート番号 |
 | `apiToken` | string | No | `""` | API 認証トークン。設定すると、全リクエストに `Authorization: Bearer TOKEN` ヘッダーが必要 |
 | `projectTitle` | string | No | `null` | ユーザー定義のプロジェクトタイトル(Webhook ペイロードと `GET /info` に含まれる) |
@@ -211,6 +211,46 @@ Webhook を受信する側が、coding-agent-pipe に送信 API でメッセー�
 
 > **ポートについて**: claude-code-pipe を同じマシンで動かしている場合は、ポートを分けてください(claude-code-pipe の既定は 3100)。
 
+### Codex を使う
+
+`engine` を `codex` にすると、Claude Code の代わりに、OpenAI の Codex CLI を扱います。API と Webhook の形は、`claude-code` と同じです。
+
+**前提**: `codex` コマンドが `PATH` にあり、ログイン済みであること(ChatGPT のアカウント、または API キー)。ログインは、このサーバーの外(`codex login`)で行います。
+
+**設定例**(`watchDir` は省略できます。省略すると `~/.codex/sessions` を見ます):
+
+```json
+{
+  "engine": "codex",
+  "port": 3101,
+  "projectTitle": "my-project",
+  "callbackUrl": "http://localhost:3101",
+  "subscribers": [
+    { "url": "http://localhost:1880/webhook", "label": "node-red" }
+  ]
+}
+```
+
+**仕組み**:
+- 観測: `~/.codex/sessions/YYYY/MM/DD/rollout-<日時>-<UUID>.jsonl` を追いかけます。`sessionId` は、ファイル名の UUID です。プロジェクト(`projectPath`)は、ファイルの 1 行目に書かれた作業ディレクトリから割り出します。
+- 起動: `codex exec --json --skip-git-repo-check -- <プロンプト>` を起動します(既存のセッションへの送信は `codex exec resume`)。作業ディレクトリは `projectPath` です。
+
+**`claude-code` との違い**:
+
+| 項目 | `codex` の場合 |
+|---|---|
+| `allowedTools`・`disallowedTools` | 受け付けますが、効きません(対応するフラグがありません) |
+| `dangerouslySkipPermissions` | `true` のとき、`--dangerously-bypass-approvals-and-sandbox` を付けます(承認とサンドボックスの**両方**を無効にします)。`false`・未指定のときは、Codex の既定(サンドボックスは読み取り専用、承認は求めない)です。環境によっては、サンドボックスが動かず(例: ユーザー名前空間を許さないコンテナ)、コマンドが失敗します。[セキュリティに関する注意事項](#セキュリティに関する注意事項)を参照 |
+| `POST /sessions/new`・`POST /sessions/:id/send` のレスポンス | `claudeCodeVersion` は返しません。`codingAgentVersion`・`model`・`cwd`・`permissionMode`・`apiKeySource` は `null`、`tools` は空です(Codex の最初の出力に、これらが載らないため) |
+| `GET /claude-version` | 登録されません |
+| ツール呼び出し | Codex のツール名(`exec` など)で出ます。1 回の呼び出しに、複数のコマンドが入ることがあります |
+| トークン数 | `GET /sessions` の `totalTokens` などは、Codex の記録(`token_usage_record`)から計算します。`input_tokens` は、キャッシュから読んだ分(`cache_read_input_tokens`)を除いた値で、Claude に揃えています。Webhook には載りません |
+| サブエージェント | Codex が起動したサブエージェントは、別のセッションとして出ます。Webhook の `isSubagent` が `true` になり、`GET /sessions` と `GET /projects` の既定では除外されます(`excludeAgents=false` で含めます) |
+| `cancel` | SIGINT で止まります(確認した範囲では、数百ミリ秒。終了コードは `1`)。中断したセッションは、続けて再開できます |
+| MQTT・Windows | 動作を確かめていません |
+
+> `claude-code` と `codex` は、別のプロセスとして立てます(1 プロセス = 1 エンジン)。同じマシンで両方を動かすときは、ポートを分けてください。
+
 ---
 
 ## API リファレンス
@@ -258,7 +298,7 @@ curl http://localhost:3100/health
 ```json
 {
   "status": "ok",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "uptime": 123.456
 }
 ```
@@ -286,7 +326,7 @@ curl http://localhost:3100/version
 ```json
 {
   "name": "coding-agent-pipe",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "A pipe for coding agent CLI input/output using JSONL and Hono"
 }
 ```
@@ -311,7 +351,7 @@ curl http://localhost:3100/info
 
 ```json
 {
-  "version": "0.1.0",
+  "version": "0.2.0",
   "os": "linux",
   "communicationMode": "bidirectional",
   "backendType": "claude_code",
@@ -330,9 +370,9 @@ curl http://localhost:3100/info
 | `version` | string | 現在のバージョン |
 | `os` | string | `"linux"`、`"mac"`、`"windows"` のいずれか(WSL は `"linux"`) |
 | `communicationMode` | string | `"watch-only"`(subscriber なし)、`"webhook-only"`(subscriber はあるが `callbackUrl` も `mqtt.commandTopic` もない)、`"bidirectional"`(subscriber があり、`callbackUrl` または `mqtt.commandTopic` もある) |
-| `backendType` | string | 旧来の互換項目(`claude_code`)。どのエージェントかは `engine` を見る |
+| `backendType` | string | 旧来の互換項目(`claude_code`。`codex` のときは `codex`)。どのエージェントかは `engine` を見る |
 | `pipeApp` | string | 常に `"coding-agent-pipe"`(claude-code-pipe は送らない) |
-| `engine` | string | どのコーディングエージェントか(例: `"claude-code"`。claude-code-pipe は送らない) |
+| `engine` | string | どのコーディングエージェントか(`"claude-code"`、`"codex"`。claude-code-pipe は送らない) |
 | `callbackUrl` | string\|null | `config.callbackUrl`。未設定は `null` |
 | `mqttCommandTopic` | string\|null | `config.mqtt.commandTopic`。MQTT 未設定は `null`。broker の URL・認証情報は含まれない |
 | `subscriberCount` | number | 設定済み `subscribers` の件数 |
@@ -627,10 +667,13 @@ curl -X POST http://localhost:3100/sessions/new \
   "cwd": "/home/user/projects/my-app",
   "permissionMode": "default",
   "claudeCodeVersion": "2.1.289",
+  "codingAgentVersion": "2.1.289",
   "apiKeySource": "none",
   "tools": ["Read", "Grep", "Bash"]
 }
 ```
+
+`codingAgentVersion` は、エンジンに依らない名前のバージョンです(`claude-code` では `claudeCodeVersion` と同じ値、`codex` では `null`)。`claudeCodeVersion` は `claude-code` のときだけ返ります。
 
 起動と同時に、Webhook の `session-started` が配信されます(のちに `user-message-received`、`assistant-response-completed`、終了時に `process-exit`)。
 
@@ -674,6 +717,7 @@ curl -X POST http://localhost:3100/sessions/SESSION_ID/send \
   "cwd": "/home/user/projects/my-app",
   "permissionMode": "default",
   "claudeCodeVersion": "2.1.289",
+  "codingAgentVersion": "2.1.289",
   "apiKeySource": "none"
 }
 ```
@@ -1101,9 +1145,9 @@ Webhook は、次の構造の JSON を、`POST`(`Content-Type: application/json`
 | `callbackUrl` | string\|null | `config.callbackUrl`(未設定は `null`)。受け手が、この pipe に戻るときの URL |
 | `os` | string | `"mac"`、`"linux"`、`"windows"`(WSL は `"linux"`) |
 | `communicationMode` | string | `"watch-only"`、`"webhook-only"`、`"bidirectional"`([`GET /info`](#get-info)を参照) |
-| `backendType` | string | 旧来の互換項目(`claude_code`) |
+| `backendType` | string | 旧来の互換項目(`claude_code`。`codex` のときは `codex`) |
 | `pipeApp` | string | 常に `"coding-agent-pipe"`。claude-code-pipe は送らない(無ければ `claude-code-pipe` とみなせる) |
-| `engine` | string | どのコーディングエージェントか(例: `"claude-code"`)。claude-code-pipe は送らない(無ければ `claude-code` とみなせる) |
+| `engine` | string | どのコーディングエージェントか(`"claude-code"`、`"codex"`)。claude-code-pipe は送らない(無ければ `claude-code` とみなせる) |
 | `mqttCommandTopic` | string | `config.mqtt.commandTopic`(設定した場合のみ) |
 | `projectPath`・`projectName` | string | セッションのプロジェクトのパスと名前(セッションファイルの場所から割り出す。サブエージェントは、そのセッションが属するプロジェクト) |
 | `projectTitle` | string | `config.projectTitle`(設定した場合のみ) |
@@ -1158,7 +1202,7 @@ Webhook は、次の構造の JSON を、`POST`(`Content-Type: application/json`
 ```json
 {
   "type": "user-message-received",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "sessionId": "11111111-1111-4111-8111-111111111111",
   "timestamp": "2026-09-01T00:33:20.000Z",
   "cwdPath": "/home/user/workspace/repos/coding-agent-pipe",
@@ -1185,7 +1229,7 @@ Webhook は、次の構造の JSON を、`POST`(`Content-Type: application/json`
 ```json
 {
   "type": "assistant-response-completed",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "sessionId": "11111111-1111-4111-8111-111111111111",
   "timestamp": "2026-09-01T00:33:21.000Z",
   "cwdPath": "/home/user/workspace/repos/coding-agent-pipe",
@@ -1221,7 +1265,7 @@ Webhook は、次の構造の JSON を、`POST`(`Content-Type: application/json`
 ```json
 {
   "type": "session-started",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "sessionId": "55555555-5555-4555-8555-555555555555",
   "timestamp": "2026-09-01T00:00:00.000Z",
   "cwdPath": "/home/user/workspace/repos/coding-agent-pipe",
@@ -1244,7 +1288,7 @@ Webhook は、次の構造の JSON を、`POST`(`Content-Type: application/json`
 ```json
 {
   "type": "process-exit",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "sessionId": "55555555-5555-4555-8555-555555555555",
   "timestamp": "2026-09-01T00:00:05.000Z",
   "cwdPath": "/home/user/workspace/repos/coding-agent-pipe",
@@ -1318,7 +1362,6 @@ Webhook は、次の構造の JSON を、`POST`(`Content-Type: application/json`
 | 同じセッションに、続けて 2 回送る | 最初のプロセスが管理から外れ、`DELETE /processes`・`cancel` で止められない | 前の送信が終わってから、次を送る |
 | 1 行の書き込みが、100ms 以上空いて分割されると、その行を失う | まれに、メッセージ系のイベントが欠ける | (エージェント側の書き込みの仕方に依存) |
 | リクエストが途中で止まった接続があると、停止(SIGINT / SIGTERM)が終わらない | プロセスが終了しない | 接続が切れるのを待つか、`kill -9` |
-| サーバーの停止では、起動した子プロセス(エージェント)は止まらない | 停止後も、エージェントが動き続けることがある | 停止の前に `DELETE /processes` で止める |
 
 ---
 
@@ -1352,7 +1395,7 @@ cp config.example.json config.json
 
 **症状:** `[index] Unknown engine: "..."`
 
-**解決策:** `config.engine` に、未対応の値が入っています。今使えるのは `claude-code` だけです(未指定でも `claude-code`)。
+**解決策:** `config.engine` に、未対応の値が入っています。今使えるのは `claude-code` と `codex` です(未指定は `claude-code`)。
 
 ---
 
@@ -1437,7 +1480,7 @@ curl -H "Authorization: Bearer YOUR_TOKEN_HERE" \
 
 ### サーバーの停止と再起動
 
-**停止:** `Ctrl+C`(SIGINT)、または SIGTERM。観測元と、サーバーを止めて終了します。**起動したエージェントのプロセスは、止まりません**(先に `DELETE /processes` で止めておく)。
+**停止:** `Ctrl+C`(SIGINT)、または SIGTERM。観測元と、サーバーを止めて終了します。**起動したエージェントのプロセスは、止まりません**(仕様です)。サーバーを再起動しても、実行中のエージェントは動き続けます。エージェントも止めたいときは、停止の前に `DELETE /processes` で止めてください。
 
 **再起動:** 停止してから、`npm start` で起動します。設定の変更は、再起動で反映されます(起動時に 1 回だけ読むため)。
 
@@ -1515,7 +1558,7 @@ coding-agent-pipe/
 
 ### ⚠️ `dangerouslySkipPermissions` フラグ
 
-`dangerouslySkipPermissions` フラグは、Claude Code のツール使用時の権限確認プロンプトを回避します。**これは非常に危険であり、管理された信頼できる環境でのみ使用してください。**
+`dangerouslySkipPermissions` フラグは、Claude Code のツール使用時の権限確認プロンプトを回避します(`codex` では、承認とサンドボックスの**両方**を無効にします。[Codex を使う](#codex-を使う)を参照)。**これは非常に危険であり、管理された信頼できる環境でのみ使用してください。**
 
 #### 動作の仕組み
 

@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-10
+
+### Added
+- **Codex engine**: with `"engine": "codex"`, the server handles OpenAI's Codex CLI instead of Claude Code (the API and Webhook shapes are the same). It follows `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl` (`watchDir` defaults to `~/.codex/sessions` for this engine), starts `codex exec --json` (and `codex exec resume` for an existing session) without a PTY, and derives `projectPath` from the working directory on the first line of each session file. Sub-agents started by Codex appear as separate sessions with `isSubagent: true` and are excluded from the default `GET /sessions` list. `allowedTools` and `disallowedTools` have no effect, and `dangerouslySkipPermissions` maps to `--dangerously-bypass-approvals-and-sandbox` (approvals and the sandbox). Token counts (`totalTokens`, `usage`) are computed from Codex's `token_usage_record` records (`input_tokens` excludes the cached part, like Claude). Windows and MQTT are not verified. See "Using Codex" in DETAILS
+- `codingAgentVersion` in the responses of `POST /sessions/new` and `POST /sessions/:id/send`: the engine-independent name of the agent version. With `claude-code` it has the same value as `claudeCodeVersion` (which is still returned); with `codex` it is `null` and `claudeCodeVersion` is not returned
+
+### Fixed
+- A start that failed no longer emits a `session-timeout` about 60 seconds later. When the agent process exited without reporting its session (or could not be started), the 60-second start timer kept running, so a `session-timeout` webhook was sent for a session that had already ended, and `kill` was called on the dead process. The timer is now stopped when the process exits or fails to start, for both new sessions and sends to an existing session. A process that is still running when the timer expires is handled as before
+
+### Changed
+- Documentation only: that shutting down the server does not stop the agent processes it started is now documented as intended behavior, not a known weakness. Behavior is unchanged. It is removed from "Known behaviors" in DETAILS and described under stopping and restarting the server
+
 ## [0.1.0] - 2026-10-08
 
 ### Fixed

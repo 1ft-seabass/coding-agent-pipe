@@ -6,6 +6,18 @@
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-10
+
+### Added
+- **Codex エンジン**: `"engine": "codex"` にすると、Claude Code の代わりに、OpenAI の Codex CLI を扱う(API と Webhook の形は同じ)。`~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl` を追いかけ(このエンジンでは `watchDir` の既定が `~/.codex/sessions`)、PTY を使わずに `codex exec --json`(既存のセッションへは `codex exec resume`)を起動し、`projectPath` は、各セッションファイルの 1 行目の作業ディレクトリから割り出す。Codex が起動したサブエージェントは、`isSubagent: true` の別のセッションとして出て、`GET /sessions` の既定の一覧からは除かれる。`allowedTools`・`disallowedTools` は効かず、`dangerouslySkipPermissions` は `--dangerously-bypass-approvals-and-sandbox`(承認とサンドボックス)に対応する。トークン数(`totalTokens`、`usage`)は、Codex の `token_usage_record` から計算する(`input_tokens` は、Claude と同じく、キャッシュ分を除く)。Windows と MQTT は未確認。DETAILS の「Codex を使う」を参照
+- `POST /sessions/new` と `POST /sessions/:id/send` のレスポンスに `codingAgentVersion` を追加した。エンジンに依らない名前のエージェントのバージョン。`claude-code` では `claudeCodeVersion`(これまでどおり返す)と同じ値、`codex` では `null` で、`claudeCodeVersion` は返さない
+
+### Fixed
+- 起動に失敗したあと、約 60 秒後に `session-timeout` が出ないようにした。エージェントのプロセスが、セッションを報告しないまま終了した(または起動できなかった)とき、60 秒の起動タイマーが動き続け、すでに終わったセッションについて `session-timeout` の Webhook が送られ、終わったプロセスに `kill` が呼ばれていた。プロセスの終了時と起動エラーのときに、タイマーを止める(新規のセッションと、既存のセッションへの送信の両方)。タイマーが切れた時点で、まだ動いているプロセスの扱いは、これまでどおり
+
+### Changed
+- ドキュメントのみ: サーバーを止めても、起動したエージェントのプロセスが止まらないことを、既知の弱点でなく、仕様として書いた。挙動は変わらない。DETAILS の「既知の挙動」から外し、サーバーの停止と再起動の節に書いた
+
 ## [0.1.0] - 2026-10-08
 
 ### Fixed

@@ -71,7 +71,7 @@ function spawnProcess(claudeArgs, cwd) {
 /**
  * stdout の1行(JSON)が system/init なら、その情報を返す。そうでなければ null
  * @param {object} json - stream-json の1行をパースしたもの
- * @returns {object|null} { sessionId, model, cwd, permissionMode, claudeCodeVersion, apiKeySource, tools }
+ * @returns {object|null} { sessionId, model, cwd, permissionMode, claudeCodeVersion, codingAgentVersion, apiKeySource, tools }
  */
 function parseInit(json) {
   if (!(json.type === 'system' && json.subtype === 'init')) {
@@ -83,6 +83,7 @@ function parseInit(json) {
     cwd: json.cwd || null,
     permissionMode: json.permissionMode || null,
     claudeCodeVersion: json.claude_code_version || null,
+    codingAgentVersion: json.claude_code_version || null,
     apiKeySource: json.apiKeySource || null,
     tools: json.tools || [],
   };

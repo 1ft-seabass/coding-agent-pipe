@@ -799,6 +799,7 @@ function createApiRouter(config, adapter) {
         cwd: result.cwd,
         permissionMode: result.permissionMode,
         claudeCodeVersion: result.claudeCodeVersion,
+        codingAgentVersion: result.codingAgentVersion,
         apiKeySource: result.apiKeySource,
         tools: result.tools
       });
@@ -911,6 +912,7 @@ function createApiRouter(config, adapter) {
         cwd: result.cwd,
         permissionMode: result.permissionMode,
         claudeCodeVersion: result.claudeCodeVersion,
+        codingAgentVersion: result.codingAgentVersion,
         apiKeySource: result.apiKeySource,
         message: 'Message sent successfully'
       });

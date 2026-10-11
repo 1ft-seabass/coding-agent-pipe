@@ -23,7 +23,7 @@ Complete documentation for coding-agent-pipe
 
 coding-agent-pipe is a thin bridge that watches the session files (JSONL) of a coding agent, delivers them by Webhook, and reads, sends, and cancels sessions through a REST API (and MQTT).
 
-- **1 process = 1 engine**: At startup, `config.engine` selects which coding agent the process handles. Currently only `claude-code` is available (an unset or empty value also means `claude-code`). To handle another engine, run it as a separate process.
+- **1 process = 1 engine**: At startup, `config.engine` selects which coding agent the process handles. Currently `claude-code` and `codex` are available (an unset or empty value means `claude-code`). To handle another engine, run it as a separate process. See [Using Codex](#using-codex).
 - It carries over the API and Webhook output of claude-code-pipe (0.9.x). Compared with claude-code-pipe, it **adds** the following.
   - `pipeApp` (which app the event comes from; always `"coding-agent-pipe"`) and `engine` (which agent; for example `"claude-code"`) in Webhooks and in `GET /info`. claude-code-pipe does not send these two fields. When they are absent, a receiver can treat `pipeApp` as `claude-code-pipe` and `engine` as `claude-code`.
 - Routes and fields that claude-code-pipe's documentation did not cover (`GET /health`, `GET /managed`, and the `alive` field of `GET /processes`, among others) are documented here (the features existed in claude-code-pipe as well).
@@ -83,8 +83,8 @@ Copy `config.example.json` to `config.json` and edit it. (`config.json` is read 
 
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
-| `engine` | string | No | `"claude-code"` | The coding agent to handle. Unset or empty means `claude-code`. An unknown value makes the process exit with an error at startup |
-| `watchDir` | string | Yes | - | Directory to watch for session files (e.g., `~/.claude/projects`). `~` is expanded. **If it does not exist, the server does not create it**: it logs a warning once, keeps running, and starts watching when the directory appears (checked every 5 seconds) |
+| `engine` | string | No | `"claude-code"` | The coding agent to handle (`claude-code`, `codex`). Unset or empty means `claude-code`. An unknown value makes the process exit with an error at startup |
+| `watchDir` | string | Yes (No when `engine` is `codex`) | - | Directory to watch for session files (e.g., `~/.claude/projects`). If omitted with `codex`, `~/.codex/sessions`. `~` is expanded. **If it does not exist, the server does not create it**: it logs a warning once, keeps running, and starts watching when the directory appears (checked every 5 seconds) |
 | `port` | number | No | `3100` | Port number for the server |
 | `apiToken` | string | No | `""` | API authentication token. If set, all requests must include the `Authorization: Bearer TOKEN` header |
 | `projectTitle` | string | No | `null` | User-defined project title (included in Webhook payloads and in `GET /info`) |
@@ -211,6 +211,46 @@ Useful when the side that receives the Webhook sends messages back to coding-age
 
 > **About ports**: If claude-code-pipe runs on the same machine, use different ports (claude-code-pipe's default is 3100).
 
+### Using Codex
+
+Set `engine` to `codex` to handle OpenAI's Codex CLI instead of Claude Code. The shapes of the API and Webhooks are the same as for `claude-code`.
+
+**Prerequisite**: the `codex` command is on the `PATH` and you are logged in (a ChatGPT account or an API key). Log in outside this server (`codex login`).
+
+**Configuration example** (`watchDir` can be omitted; if omitted, `~/.codex/sessions` is watched):
+
+```json
+{
+  "engine": "codex",
+  "port": 3101,
+  "projectTitle": "my-project",
+  "callbackUrl": "http://localhost:3101",
+  "subscribers": [
+    { "url": "http://localhost:1880/webhook", "label": "node-red" }
+  ]
+}
+```
+
+**How it works**:
+- Observation: follows `~/.codex/sessions/YYYY/MM/DD/rollout-<timestamp>-<UUID>.jsonl`. `sessionId` is the UUID in the file name. The project (`projectPath`) is derived from the working directory written on the first line of the file.
+- Starting: runs `codex exec --json --skip-git-repo-check -- <prompt>` (sending to an existing session uses `codex exec resume`). The working directory is `projectPath`.
+
+**Differences from `claude-code`**:
+
+| Item | With `codex` |
+|---|---|
+| `allowedTools`, `disallowedTools` | Accepted but have no effect (there is no matching flag) |
+| `dangerouslySkipPermissions` | When `true`, `--dangerously-bypass-approvals-and-sandbox` is passed (this disables **both** approvals and the sandbox). When `false` or unset, Codex's defaults apply (read-only sandbox, no approval requests). In some environments the sandbox does not work (for example, containers that do not allow user namespaces) and commands fail. See [Security Considerations](#security-considerations) |
+| Responses of `POST /sessions/new` and `POST /sessions/:id/send` | `claudeCodeVersion` is not returned. `codingAgentVersion`, `model`, `cwd`, `permissionMode`, and `apiKeySource` are `null`, and `tools` is empty (Codex's first output does not carry them) |
+| `GET /claude-version` | Not registered |
+| Tool calls | Appear under Codex's tool names (such as `exec`). One call can contain several commands |
+| Token counts | `totalTokens` and the like in `GET /sessions` are computed from Codex's records (`token_usage_record`). `input_tokens` excludes the part read from the cache (`cache_read_input_tokens`), to match Claude. They are not included in Webhooks |
+| Sub-agents | A sub-agent started by Codex appears as a separate session. `isSubagent` is `true` in Webhooks, and it is excluded by default from `GET /sessions` and `GET /projects` (include it with `excludeAgents=false`) |
+| `cancel` | Stops on SIGINT (within a few hundred milliseconds in what was checked; exit code `1`). A cancelled session can be resumed afterwards |
+| MQTT, Windows | Not verified |
+
+> Run `claude-code` and `codex` as separate processes (1 process = 1 engine). If you run both on the same machine, use different ports.
+
 ---
 
 ## API Reference
@@ -258,7 +298,7 @@ curl http://localhost:3100/health
 ```json
 {
   "status": "ok",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "uptime": 123.456
 }
 ```
@@ -286,7 +326,7 @@ curl http://localhost:3100/version
 ```json
 {
   "name": "coding-agent-pipe",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "A pipe for coding agent CLI input/output using JSONL and Hono"
 }
 ```
@@ -311,7 +351,7 @@ curl http://localhost:3100/info
 
 ```json
 {
-  "version": "0.1.0",
+  "version": "0.2.0",
   "os": "linux",
   "communicationMode": "bidirectional",
   "backendType": "claude_code",
@@ -330,9 +370,9 @@ curl http://localhost:3100/info
 | `version` | string | Current version |
 | `os` | string | One of `"linux"`, `"mac"`, `"windows"` (WSL is `"linux"`) |
 | `communicationMode` | string | `"watch-only"` (no subscribers), `"webhook-only"` (has subscribers but neither `callbackUrl` nor `mqtt.commandTopic`), `"bidirectional"` (has subscribers, and also `callbackUrl` or `mqtt.commandTopic`) |
-| `backendType` | string | Legacy compatibility field (`claude_code`). Use `engine` to tell which agent it is |
+| `backendType` | string | Legacy compatibility field (`claude_code`; `codex` for `codex`). Use `engine` to tell which agent it is |
 | `pipeApp` | string | Always `"coding-agent-pipe"` (claude-code-pipe does not send it) |
-| `engine` | string | Which coding agent it is (e.g., `"claude-code"`; claude-code-pipe does not send it) |
+| `engine` | string | Which coding agent it is (`"claude-code"` or `"codex"`; claude-code-pipe does not send it) |
 | `callbackUrl` | string\|null | `config.callbackUrl`. `null` if unset |
 | `mqttCommandTopic` | string\|null | `config.mqtt.commandTopic`. `null` if MQTT is not configured. The broker URL and credentials are not included |
 | `subscriberCount` | number | Number of configured `subscribers` |
@@ -627,10 +667,13 @@ curl -X POST http://localhost:3100/sessions/new \
   "cwd": "/home/user/projects/my-app",
   "permissionMode": "default",
   "claudeCodeVersion": "2.1.289",
+  "codingAgentVersion": "2.1.289",
   "apiKeySource": "none",
   "tools": ["Read", "Grep", "Bash"]
 }
 ```
+
+`codingAgentVersion` is the engine-independent name of the agent version (the same value as `claudeCodeVersion` with `claude-code`; `null` with `codex`). `claudeCodeVersion` is returned only with `claude-code`.
 
 At startup, the Webhook `session-started` is delivered (later followed by `user-message-received` and `assistant-response-completed`, and by `process-exit` when the process ends).
 
@@ -674,6 +717,7 @@ curl -X POST http://localhost:3100/sessions/SESSION_ID/send \
   "cwd": "/home/user/projects/my-app",
   "permissionMode": "default",
   "claudeCodeVersion": "2.1.289",
+  "codingAgentVersion": "2.1.289",
   "apiKeySource": "none"
 }
 ```
@@ -1101,9 +1145,9 @@ A Webhook receives JSON with the following structure by `POST` (`Content-Type: a
 | `callbackUrl` | string\|null | `config.callbackUrl` (`null` if unset). The URL a receiver uses to come back to this pipe |
 | `os` | string | `"mac"`, `"linux"`, `"windows"` (WSL is `"linux"`) |
 | `communicationMode` | string | `"watch-only"`, `"webhook-only"`, `"bidirectional"` (see [`GET /info`](#get-info)) |
-| `backendType` | string | Legacy compatibility field (`claude_code`) |
+| `backendType` | string | Legacy compatibility field (`claude_code`; `codex` for `codex`) |
 | `pipeApp` | string | Always `"coding-agent-pipe"`. claude-code-pipe does not send it (when absent, it can be treated as `claude-code-pipe`) |
-| `engine` | string | Which coding agent it is (e.g., `"claude-code"`). claude-code-pipe does not send it (when absent, it can be treated as `claude-code`) |
+| `engine` | string | Which coding agent it is (`"claude-code"` or `"codex"`). claude-code-pipe does not send it (when absent, it can be treated as `claude-code`) |
 | `mqttCommandTopic` | string | `config.mqtt.commandTopic` (only when set) |
 | `projectPath`, `projectName` | string | Path and name of the session's project (derived from the location of the session file; for a subagent, the project that its session belongs to) |
 | `projectTitle` | string | `config.projectTitle` (only when set) |
@@ -1158,7 +1202,7 @@ Message events are emitted by **watching the session files**, so they also cover
 ```json
 {
   "type": "user-message-received",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "sessionId": "11111111-1111-4111-8111-111111111111",
   "timestamp": "2026-09-01T00:33:20.000Z",
   "cwdPath": "/home/user/workspace/repos/coding-agent-pipe",
@@ -1185,7 +1229,7 @@ Message events are emitted by **watching the session files**, so they also cover
 ```json
 {
   "type": "assistant-response-completed",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "sessionId": "11111111-1111-4111-8111-111111111111",
   "timestamp": "2026-09-01T00:33:21.000Z",
   "cwdPath": "/home/user/workspace/repos/coding-agent-pipe",
@@ -1221,7 +1265,7 @@ Message events are emitted by **watching the session files**, so they also cover
 ```json
 {
   "type": "session-started",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "sessionId": "55555555-5555-4555-8555-555555555555",
   "timestamp": "2026-09-01T00:00:00.000Z",
   "cwdPath": "/home/user/workspace/repos/coding-agent-pipe",
@@ -1244,7 +1288,7 @@ Message events are emitted by **watching the session files**, so they also cover
 ```json
 {
   "type": "process-exit",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "sessionId": "55555555-5555-4555-8555-555555555555",
   "timestamp": "2026-09-01T00:00:05.000Z",
   "cwdPath": "/home/user/workspace/repos/coding-agent-pipe",
@@ -1318,7 +1362,6 @@ The following behaviors are inherited from claude-code-pipe and are unchanged fo
 | Sending twice in a row to the same session | The first process is dropped from management and cannot be stopped by `DELETE /processes` or `cancel` | Send the next message after the previous send has finished |
 | If a single line is written in pieces with a gap of 100ms or more, that line is lost | Rarely, a message event is missing | (Depends on how the agent writes) |
 | If a connection whose request has stalled exists, shutdown (SIGINT / SIGTERM) does not finish | The process does not exit | Wait for the connection to close, or use `kill -9` |
-| Shutting down the server does not stop the child processes (agents) it started | The agents may keep running after shutdown | Stop them with `DELETE /processes` before shutting down |
 
 ---
 
@@ -1352,7 +1395,7 @@ Then edit it to suit your environment.
 
 **Symptom:** `[index] Unknown engine: "..."`
 
-**Solution:** `config.engine` contains an unsupported value. Currently only `claude-code` is available (an unset value also means `claude-code`).
+**Solution:** `config.engine` contains an unsupported value. Currently `claude-code` and `codex` are available (an unset value means `claude-code`).
 
 ---
 
@@ -1437,7 +1480,7 @@ curl -H "Authorization: Bearer YOUR_TOKEN_HERE" \
 
 ### Stopping and restarting the server
 
-**Stop:** `Ctrl+C` (SIGINT) or SIGTERM. This stops the observation sources and the server, then exits. **The agent processes it started are not stopped** (stop them first with `DELETE /processes`).
+**Stop:** `Ctrl+C` (SIGINT) or SIGTERM. This stops the observation sources and the server, then exits. **The agent processes it started are not stopped** (by design). Restarting the server does not interrupt a running agent. If you also want the agents stopped, stop them with `DELETE /processes` before shutting down.
 
 **Restart:** Stop the server, then start it with `npm start`. Configuration changes take effect on restart (the file is read only once at startup).
 
@@ -1515,7 +1558,7 @@ To add a new engine, create `src/adapters/<engine>/index.js` and satisfy this in
 
 ### ⚠️ `dangerouslySkipPermissions` Flag
 
-The `dangerouslySkipPermissions` flag bypasses the permission confirmation prompts shown when Claude Code uses tools. **This is extremely dangerous. Use it only in a controlled, trusted environment.**
+The `dangerouslySkipPermissions` flag bypasses the permission confirmation prompts shown when Claude Code uses tools (with `codex`, it disables **both** approvals and the sandbox; see [Using Codex](#using-codex)). **This is extremely dangerous. Use it only in a controlled, trusted environment.**
 
 #### How It Works
 
