@@ -6,6 +6,11 @@
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-10-12
+
+### Added
+- Codex: 使っているモデルを、アシスタントのイベント直下の `model` に載せる(`session-started` の `model` と同じ位置。Webhook の `assistant-response-completed` や `GET /sessions/:id/messages` など)。Codex の `turn_context` から読む。受け手は、`send` で `model` を指定したときも含めて、実際のモデルを表示できる。これまで、Codex ではどこにも載らなかった(起動のレスポンスと `session-started` の `model` は、Codex の最初の出力に無いため、今も `null`)。まだモデルが分からないときは、項目ごと付かない。`claude-code` は付けない。JSON Schema に定義を足した
+
 ## [0.3.0] - 2026-10-11
 
 > **受け手に影響する変更:** `backendType` は送らなくなりました。`engine` を読んでください(Removed を参照)。この変更は 0.3.0 に含まれます。

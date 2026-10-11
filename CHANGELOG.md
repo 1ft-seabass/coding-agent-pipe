@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-10-12
+
+### Added
+- Codex: the model in use is now set as `model` directly on assistant events (the same position as `model` in `session-started`; for example the `assistant-response-completed` Webhook and `GET /sessions/:id/messages`), read from Codex's `turn_context`. A receiver can show the actual model, including when `send` specifies `model`. Before, nothing carried it for Codex (`model` in the start response and in `session-started` is still `null`, because Codex's first output does not include it). The field is absent when the model is not known yet, and `claude-code` does not set it. The JSON Schema now describes it
+
 ## [0.3.0] - 2026-10-11
 
 > **Breaking change for receivers:** `backendType` is no longer sent. Read `engine` instead (see Removed). This change is in 0.3.0.

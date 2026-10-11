@@ -19,6 +19,22 @@ import { auth } from './auth.js';
 const defaultWatchDir = '~/.codex/sessions';
 
 /**
+ * ファイルごとに「いまのモデル」を覚える parse を作る(turn_context の行を読んだら覚え、続く assistant のイベントに載せる)。
+ * 複数のセッションの行が混ざるので、覚える先はファイルのパスごとに分ける。
+ */
+function createParse() {
+  const ctxByFile = new Map();
+  return (line, filePath) => {
+    let ctx;
+    if (filePath) {
+      ctx = ctxByFile.get(filePath);
+      if (!ctx) { ctx = { model: null }; ctxByFile.set(filePath, ctx); }
+    }
+    return parseLine(line, ctx);
+  };
+}
+
+/**
  * @param {object} config - 設定オブジェクト(watchDir を使う)
  */
 export default function createAdapter(config) {
@@ -26,7 +42,7 @@ export default function createAdapter(config) {
     id: 'codex',
     observe: { kind: 'file-tail', extension: '.jsonl' },
     defaultWatchDir,
-    parse: parseLine,
+    parse: createParse(),
     sessionIdFromPath,
     resolveProject: extractProjectPath,
     isSubagent,

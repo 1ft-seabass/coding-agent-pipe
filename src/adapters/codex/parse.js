@@ -12,7 +12,10 @@
  *                               → role: assistant、content: [{ type: 'tool_use', id: call_id, name, input }]
  *   custom_tool_call_output / function_call_output
  *                               → role: user、content: [{ type: 'tool_result', tool_use_id: call_id, content }]
- * 捨てる行: developer の指示、環境情報(<environment_context>)、session_meta、turn_context、world_state、
+ * turn_context(ターンの先頭に 1 行ある)の model は、そのファイルの「いまのモデル」として覚え、続く assistant のイベントの
+ *   直下の model に載せる(session-started などの model と同じ位置。message の中ではない)。覚える先は、呼び出し側が渡す
+ *   ctx({ model })。ctx が無ければ(1 行だけを解釈する呼び出し)、載せない。起動の出力(thread.started)には、モデルが載らない。
+ * 捨てる行: developer の指示、環境情報(<environment_context>)、session_meta、world_state、
  *   token_usage_record、event_msg、agent_message(エージェント間の連絡)、reasoning。event_msg の item_completed(UserMessage / AgentMessage)は、
  *   response_item と同じやり取りの二重の記録なので、response_item だけを正とする。
  * トークン数(token_usage_record)は、assistant の行と別の行に出る。この行ごとの変換には載せず、
@@ -38,8 +41,8 @@ function isUserText(payload, blocks) {
   return blocks.length > 0 && !blocks[0].text.startsWith(ENV_CONTEXT_PREFIX);
 }
 
-function buildEvent(raw, payload, role, content, tools) {
-  return {
+function buildEvent(raw, payload, role, content, tools, model) {
+  const event = {
     parentUuid: null,
     sessionId: null,
     uuid: payload.id || null,
@@ -48,14 +51,19 @@ function buildEvent(raw, payload, role, content, tools) {
     message: { role, content },
     tools
   };
+  // モデルは、イベント直下の model に載せる(session-started などの model と同じ位置)。message の中ではない。
+  // 分かっているときだけ載せる(分からなければ、項目ごと付けない)。model を渡すのは assistant のイベントだけ
+  if (model) event.model = model;
+  return event;
 }
 
 /**
  * セッションファイルの1行をパースして、正規化イベントに変換する
  * @param {string} jsonString - 1行(JSON文字列)
+ * @param {{model: (string|null)}} [ctx] - そのファイルの「いまのモデル」の置き場(ファイルごとに 1 つ)。turn_context の行で更新し、assistant のイベントに載せる
  * @returns {object|null} 正規化イベント。拾わない行・解釈できない行は null
  */
-function parseLine(jsonString) {
+function parseLine(jsonString, ctx) {
   if (!jsonString || !jsonString.trim()) {
     return null;
   }
@@ -68,15 +76,22 @@ function parseLine(jsonString) {
     return null;
   }
 
+  if (raw && raw.type === 'turn_context' && raw.payload) {
+    // イベントは出さない。このファイルの、いまのモデルを覚える
+    if (ctx && typeof raw.payload.model === 'string' && raw.payload.model) ctx.model = raw.payload.model;
+    return null;
+  }
+
   if (!raw || raw.type !== 'response_item' || !raw.payload) {
     return null;
   }
   const payload = raw.payload;
+  const model = ctx ? ctx.model : null;
 
   if (payload.type === 'message') {
     if (payload.role === 'assistant') {
       const blocks = textBlocks(payload.content, ['output_text']);
-      return blocks.length > 0 ? buildEvent(raw, payload, 'assistant', blocks, []) : null;
+      return blocks.length > 0 ? buildEvent(raw, payload, 'assistant', blocks, [], model) : null;
     }
     if (payload.role === 'user') {
       const blocks = textBlocks(payload.content, ['input_text']);
@@ -89,7 +104,7 @@ function parseLine(jsonString) {
     // custom_tool_call は input、function_call は arguments(どちらも文字列)に、呼び出しの内容がある
     const block = { type: 'tool_use', id: payload.call_id, name: payload.name, input: payload.input ?? payload.arguments };
     if (payload.namespace) block.namespace = payload.namespace;
-    return buildEvent(raw, payload, 'assistant', [block], [payload.name]);
+    return buildEvent(raw, payload, 'assistant', [block], [payload.name], model);
   }
 
   if (payload.type === 'custom_tool_call_output' || payload.type === 'function_call_output') {

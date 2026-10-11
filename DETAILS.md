@@ -274,6 +274,7 @@ Put `codex` in `engines` (or set the legacy `engine` to `codex`) to handle OpenA
 | `allowedTools`, `disallowedTools` | Accepted but have no effect (there is no matching flag) |
 | `dangerouslySkipPermissions` | When `true`, `--dangerously-bypass-approvals-and-sandbox` is passed (this disables **both** approvals and the sandbox). When `false` or unset, Codex's defaults apply (read-only sandbox, no approval requests). In some environments the sandbox does not work (for example, containers that do not allow user namespaces) and commands fail. See [Security Considerations](#security-considerations) |
 | Responses of `POST /sessions/new` and `POST /sessions/:id/send` | `claudeCodeVersion` is not returned. `codingAgentVersion`, `model`, `cwd`, `permissionMode`, and `apiKeySource` are `null`, and `tools` is empty (Codex's first output does not carry them) |
+| Model | `model` in the start response stays `null` (Codex's first output does not carry it). The actual model is read from Codex's record (`turn_context`) and set as **`model` directly on assistant events** (the same position as `model` in `session-started` and the other process events, not inside `message`; for example the `assistant-response-completed` Webhook and `GET /sessions/:id/messages`). If `send` specifies `model`, the new value applies from that turn. User events do not carry it. When it has not been read yet (for example, when observation started in the middle of a turn), the field is absent. Assistant events of `claude-code` carry no `model` (only `session-started` has it) |
 | `GET /claude-version` | Not registered |
 | Tool calls | Appear under Codex's tool names (such as `exec`). One call can contain several commands |
 | Token counts | `totalTokens` and the like in `GET /sessions` are computed from Codex's records (`token_usage_record`). `input_tokens` excludes the part read from the cache (`cache_read_input_tokens`), to match Claude. They are not included in Webhooks |
@@ -332,7 +333,7 @@ curl http://localhost:3100/health
 ```json
 {
   "status": "ok",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "uptime": 123.456
 }
 ```
@@ -360,7 +361,7 @@ curl http://localhost:3100/version
 ```json
 {
   "name": "coding-agent-pipe",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "A pipe for coding agent CLI input/output using JSONL and Hono"
 }
 ```
@@ -385,7 +386,7 @@ curl http://localhost:3100/info
 
 ```json
 {
-  "version": "0.3.0",
+  "version": "0.3.1",
   "os": "linux",
   "communicationMode": "bidirectional",
   "pipeApp": "coding-agent-pipe",
@@ -1315,7 +1316,7 @@ Message events are emitted by **watching the session files**, so they also cover
 ```json
 {
   "type": "user-message-received",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "sessionId": "11111111-1111-4111-8111-111111111111",
   "timestamp": "2026-09-01T00:33:20.000Z",
   "cwdPath": "/home/user/workspace/repos/coding-agent-pipe",
@@ -1341,7 +1342,7 @@ Message events are emitted by **watching the session files**, so they also cover
 ```json
 {
   "type": "assistant-response-completed",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "sessionId": "11111111-1111-4111-8111-111111111111",
   "timestamp": "2026-09-01T00:33:21.000Z",
   "cwdPath": "/home/user/workspace/repos/coding-agent-pipe",
@@ -1376,7 +1377,7 @@ Message events are emitted by **watching the session files**, so they also cover
 ```json
 {
   "type": "session-started",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "sessionId": "55555555-5555-4555-8555-555555555555",
   "timestamp": "2026-09-01T00:00:00.000Z",
   "cwdPath": "/home/user/workspace/repos/coding-agent-pipe",
@@ -1398,7 +1399,7 @@ Message events are emitted by **watching the session files**, so they also cover
 ```json
 {
   "type": "process-exit",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "sessionId": "55555555-5555-4555-8555-555555555555",
   "timestamp": "2026-09-01T00:00:05.000Z",
   "cwdPath": "/home/user/workspace/repos/coding-agent-pipe",

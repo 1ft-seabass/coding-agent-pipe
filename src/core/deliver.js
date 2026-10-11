@@ -279,6 +279,8 @@ function handleSubscriberEvent(subscriber, event, responseTime, serverInfo, adap
       isSubagent: isSubagent,
       isMeta: event.isMeta || false,
       git: gitInfo,
+      // 応答に使ったモデル(分かるエンジンだけ。session-started などの model と同じ位置)
+      ...(event.model !== undefined && { model: event.model }),
       message: event.message
     };
 

@@ -102,10 +102,11 @@ function createSessions(watchDir) {
     const content = await fs.promises.readFile(location, 'utf8');
     const events = [];
     let lastAssistant = null; // 直前の assistant のイベント。token_usage_record のトークン数を足す先
+    const ctx = { model: null }; // turn_context の model。続く assistant のイベント直下の model に載る
 
     for (const line of content.split('\n')) {
       if (!line.trim()) continue;
-      const event = parseLine(line);
+      const event = parseLine(line, ctx);
       if (event) {
         events.push(event);
         if (event.message.role === 'assistant') lastAssistant = event;

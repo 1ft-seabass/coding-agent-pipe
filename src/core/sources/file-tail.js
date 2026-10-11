@@ -20,7 +20,7 @@ class FileTailSource extends EventEmitter {
    * @param {object} options
    * @param {string} options.watchDir - 監視対象ディレクトリ
    * @param {string} options.extension - 監視するファイルの拡張子(例: '.jsonl')
-   * @param {(line: string) => object|null} options.parse - 1行を正規化イベントに変換する
+   * @param {(line: string, filePath: string) => object|null} options.parse - 1行を正規化イベントに変換する(filePath は、その行があるファイル。ファイルごとの状態を持つ adapter が使う)
    * @param {(filePath: string) => string|null} [options.sessionIdFromPath] - sessionId が無い行の補完用
    * @param {number} [options.waitIntervalMs] - watchDir が存在しないとき、現れるのを待つ確認の間隔(既定 5000)
    */
@@ -80,7 +80,7 @@ class FileTailSource extends EventEmitter {
         for (const line of lines) {
           if (!line.trim()) continue;
 
-          const event = this.parse(line);
+          const event = this.parse(line, filePath);
           if (event) {
             // sessionId をファイルパスから推定して補完
             if (!event.sessionId) {
@@ -96,7 +96,7 @@ class FileTailSource extends EventEmitter {
       stream.on('end', () => {
         // 最後に残ったバッファも処理（改行なしで終わる場合）
         if (buffer.trim()) {
-          const event = this.parse(buffer);
+          const event = this.parse(buffer, filePath);
           if (event) {
             if (!event.sessionId) {
               event.sessionId = this.sessionIdFromPath(filePath);

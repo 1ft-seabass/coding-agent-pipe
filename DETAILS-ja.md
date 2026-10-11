@@ -274,6 +274,7 @@ Webhook を受信する側が、coding-agent-pipe に送信 API でメッセー�
 | `allowedTools`・`disallowedTools` | 受け付けますが、効きません(対応するフラグがありません) |
 | `dangerouslySkipPermissions` | `true` のとき、`--dangerously-bypass-approvals-and-sandbox` を付けます(承認とサンドボックスの**両方**を無効にします)。`false`・未指定のときは、Codex の既定(サンドボックスは読み取り専用、承認は求めない)です。環境によっては、サンドボックスが動かず(例: ユーザー名前空間を許さないコンテナ)、コマンドが失敗します。[セキュリティに関する注意事項](#セキュリティに関する注意事項)を参照 |
 | `POST /sessions/new`・`POST /sessions/:id/send` のレスポンス | `claudeCodeVersion` は返しません。`codingAgentVersion`・`model`・`cwd`・`permissionMode`・`apiKeySource` は `null`、`tools` は空です(Codex の最初の出力に、これらが載らないため) |
+| モデル | 起動のレスポンスの `model` は `null` のままです(Codex の最初の出力に載らないため)。実際のモデルは、Codex の記録(`turn_context`)から読み、**アシスタントのイベント直下の `model`** に載せます(`session-started` などの `model` と同じ位置。`message` の中ではありません。Webhook の `assistant-response-completed`、`GET /sessions/:id/messages` など)。`send` で `model` を指定すると、そのターンから新しい値になります。ユーザーのイベントには載りません。ターンの途中から観測を始めたときなど、まだ読んでいないときは、項目ごと付きません。`claude-code` のアシスタントのイベントには、`model` は付きません(`session-started` の `model` だけです) |
 | `GET /claude-version` | 登録されません |
 | ツール呼び出し | Codex のツール名(`exec` など)で出ます。1 回の呼び出しに、複数のコマンドが入ることがあります |
 | トークン数 | `GET /sessions` の `totalTokens` などは、Codex の記録(`token_usage_record`)から計算します。`input_tokens` は、キャッシュから読んだ分(`cache_read_input_tokens`)を除いた値で、Claude に揃えています。Webhook には載りません |
@@ -332,7 +333,7 @@ curl http://localhost:3100/health
 ```json
 {
   "status": "ok",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "uptime": 123.456
 }
 ```
@@ -360,7 +361,7 @@ curl http://localhost:3100/version
 ```json
 {
   "name": "coding-agent-pipe",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "A pipe for coding agent CLI input/output using JSONL and Hono"
 }
 ```
@@ -385,7 +386,7 @@ curl http://localhost:3100/info
 
 ```json
 {
-  "version": "0.3.0",
+  "version": "0.3.1",
   "os": "linux",
   "communicationMode": "bidirectional",
   "pipeApp": "coding-agent-pipe",
@@ -1315,7 +1316,7 @@ Webhook は、次の構造の JSON を、`POST`(`Content-Type: application/json`
 ```json
 {
   "type": "user-message-received",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "sessionId": "11111111-1111-4111-8111-111111111111",
   "timestamp": "2026-09-01T00:33:20.000Z",
   "cwdPath": "/home/user/workspace/repos/coding-agent-pipe",
@@ -1341,7 +1342,7 @@ Webhook は、次の構造の JSON を、`POST`(`Content-Type: application/json`
 ```json
 {
   "type": "assistant-response-completed",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "sessionId": "11111111-1111-4111-8111-111111111111",
   "timestamp": "2026-09-01T00:33:21.000Z",
   "cwdPath": "/home/user/workspace/repos/coding-agent-pipe",
@@ -1376,7 +1377,7 @@ Webhook は、次の構造の JSON を、`POST`(`Content-Type: application/json`
 ```json
 {
   "type": "session-started",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "sessionId": "55555555-5555-4555-8555-555555555555",
   "timestamp": "2026-09-01T00:00:00.000Z",
   "cwdPath": "/home/user/workspace/repos/coding-agent-pipe",
@@ -1398,7 +1399,7 @@ Webhook は、次の構造の JSON を、`POST`(`Content-Type: application/json`
 ```json
 {
   "type": "process-exit",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "sessionId": "55555555-5555-4555-8555-555555555555",
   "timestamp": "2026-09-01T00:00:05.000Z",
   "cwdPath": "/home/user/workspace/repos/coding-agent-pipe",

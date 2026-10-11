@@ -84,7 +84,8 @@
       "required": ["tools", "responseTime"],
       "properties": {
         "tools": { "type": "array", "items": { "type": "string" }, "description": "この応答で使ったツール名" },
-        "responseTime": { "type": ["number", "null"], "description": "直前のメッセージからの経過秒" }
+        "responseTime": { "type": ["number", "null"], "description": "直前のメッセージからの経過秒" },
+        "model": { "type": ["string", "null"], "description": "この応答に使ったモデル(session-started などの model と同じ位置)。分かるエンジンだけが付ける(今は codex。claude-code は付けない)" }
       }
     },
 
