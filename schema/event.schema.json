@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/1ft-seabass/coding-agent-pipe/schema/event.schema.json",
   "title": "coding-agent-pipe の契約",
-  "description": "受け手(viewer など)に届く webhook のイベントと、GET /info のレスポンス。claude-code-pipe 0.9.x の出力も、この同じスキーマに合う(pipeApp と engine は coding-agent-pipe が追加した任意の項目。無ければ pipeApp は claude-code-pipe、engine は claude-code とみなす)。未知の項目は許す(受け手は追加に寛容であること)。",
+  "description": "受け手(viewer など)に届く webhook のイベントと、GET /info のレスポンス。claude-code-pipe 0.9.x の出力も、この同じスキーマに合う(pipeApp と engine は coding-agent-pipe が追加した任意の項目。無ければ pipeApp は claude-code-pipe、engine は claude-code とみなす。claude-code-pipe が送る backendType は、coding-agent-pipe では廃止した。未知の項目は許すので、claude-code-pipe の出力は backendType を持ったまま、この同じスキーマに合う)。未知の項目は許す(受け手は追加に寛容であること)。",
 
   "oneOf": [
     { "$ref": "#/$defs/webhookEvent" }
@@ -32,7 +32,7 @@
     "common": {
       "title": "すべてのイベントに共通する項目",
       "type": "object",
-      "required": ["type", "version", "sessionId", "timestamp", "cwdPath", "cwdName", "callbackUrl", "os", "communicationMode", "backendType"],
+      "required": ["type", "version", "sessionId", "timestamp", "cwdPath", "cwdName", "callbackUrl", "os", "communicationMode"],
       "properties": {
         "type": {
           "enum": ["user-message-received", "assistant-response-completed", "session-started", "session-error", "session-timeout", "cancel-initiated", "process-exit"],
@@ -46,7 +46,6 @@
         "callbackUrl": { "type": ["string", "null"], "description": "受け手から pipe に戻るときの URL" },
         "os": { "enum": ["mac", "linux", "windows"] },
         "communicationMode": { "enum": ["watch-only", "webhook-only", "bidirectional"] },
-        "backendType": { "type": "string", "description": "旧来の互換項目(例: claude_code)。どのコーディングエージェントかは engine を見る" },
         "pipeApp": { "const": "coding-agent-pipe", "description": "どのアプリから来たか。claude-code-pipe は送らない(無ければ claude-code-pipe)" },
         "engine": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]*$", "description": "どのコーディングエージェントか(例: claude-code)。claude-code-pipe は送らない(無ければ claude-code)" },
         "mqttCommandTopic": { "type": "string" },
@@ -154,12 +153,11 @@
     "info": {
       "title": "GET /info のレスポンス",
       "type": "object",
-      "required": ["version", "os", "communicationMode", "backendType", "callbackUrl", "mqttCommandTopic", "subscriberCount", "projectTitle", "watchDir"],
+      "required": ["version", "os", "communicationMode", "callbackUrl", "mqttCommandTopic", "subscriberCount", "projectTitle", "watchDir"],
       "properties": {
         "version": { "type": "string" },
         "os": { "enum": ["mac", "linux", "windows"] },
         "communicationMode": { "enum": ["watch-only", "webhook-only", "bidirectional"] },
-        "backendType": { "type": "string" },
         "pipeApp": { "const": "coding-agent-pipe" },
         "engine": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]*$" },
         "callbackUrl": { "type": ["string", "null"] },

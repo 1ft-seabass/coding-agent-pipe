@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-11
+
+> **Breaking change for receivers:** `backendType` is no longer sent. Read `engine` instead (see Removed). This change is in 0.3.0.
+
+### Added
+- **Several engines in one server.** `engines` selects the coding agents to run (`claude-code`, `codex`), and `watchDirs` sets where each engine's sessions live. The connection (port and `callbackUrl`) stays one; receivers tell the engines apart by `engine`. If `engines` is not written, only `claude-code` runs, so existing configurations keep working as they are. The legacy `engine` (one engine) and `watchDir` still work, but cannot be written together with `engines` (a startup error, because the meaning would be ambiguous). See "Running multiple engines" in DETAILS
+- `GET /engine` (the running engines) and `engines` in `GET /info` (additive; the existing fields are the values of the default engine)
+- `GET /engine/:id/auth`: whether an engine is logged in (`loggedIn`) and how (`method`), from `claude auth status` and `codex login status`. Email addresses, organization IDs, and the like are never returned. The result is kept for 30 seconds. If the CLI is unavailable, the response is still `200` with `loggedIn: false` and an `error`. `404` for an engine that is not running
+- `engine` on each session in `GET /sessions` and `GET /projects`. Both now list the sessions of every running engine together (the projects are grouped by directory). `?engine=` narrows to one engine (`400` for one that is not running). Routes that look a session up by ID (`/sessions/:id/...`) find the engine from the session ID; if the same ID exists in more than one engine, the response is `409` (choose with `?engine=`)
+- `engine` for starting sessions: `POST /sessions/new` and the MQTT command accept `engine` (default: `claude-code`, or the only running engine if `claude-code` is not running). `POST /sessions/:id/send` and the MQTT resume find the engine from the session ID. The responses of `POST /sessions/new` and `POST /sessions/:id/send` include `engine`
+- `engine` on each entry of `GET /processes` and `GET /managed`
+
+### Changed
+- The Webhook process events (`session-started`, `session-error`, `session-timeout`, `cancel-initiated`, `process-exit`) now carry the `engine` of the session they belong to (they used to carry the server's single engine). This differs from before only when several engines run
+- A `claude-code` configuration without `watchDir` used to stop at startup. It now watches `~/.claude/projects`
+- Documentation: "1 process = 1 engine" no longer applies; the configuration section, the Codex section, and the project structure were corrected
+
+### Removed
+- **`backendType`** is no longer sent in any Webhook payload or in `GET /info`. It had the same meaning as `engine` but a different spelling (`claude_code` vs `claude-code`), so it was unified into `engine` (`claude-code`, `codex`). Receivers should read `engine`; when it is absent (claude-code-pipe never sends it), treat it as `claude-code`. The JSON Schema no longer requires `backendType` and accepts payloads with or without it
+
+### Known issues
+- For `claude-code`, the project path of a session is cached by the name of its directory. If a session file without a working directory (`cwd`) is read first, a guessed path is cached, and the other sessions in the same directory get that path as their project. This was inherited from claude-code-pipe and is not fixed yet
+
 ## [0.2.0] - 2026-10-10
 
 ### Added

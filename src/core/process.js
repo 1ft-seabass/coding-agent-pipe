@@ -35,7 +35,7 @@ const SESSION_START_TIMEOUT_MS = 60 * 1000;
  * @returns {Promise<object>} { pid, sessionId } (sessionIdは実際のUUID)
  */
 function startNewSession(driver, prompt, options = {}) {
-  const { cwd, allowedTools, disallowedTools, model, dangerouslySkipPermissions, projectPath, onData, onError, onExit } = options;
+  const { cwd, allowedTools, disallowedTools, model, dangerouslySkipPermissions, projectPath, engine, onData, onError, onExit } = options;
   return new Promise((resolve, reject) => {
     const proc = driver.spawnProcess(
       driver.buildArgs({ prompt, allowedTools, disallowedTools, model, dangerouslySkipPermissions }),
@@ -53,7 +53,8 @@ function startNewSession(driver, prompt, options = {}) {
       proc,
       pid,
       startedAt: new Date(),
-      projectPath: projectPath || null
+      projectPath: projectPath || null,
+      ...(engine && { engine })
     });
 
     // タイムアウト設定
@@ -68,7 +69,8 @@ function startNewSession(driver, prompt, options = {}) {
           pid,
           timestamp: new Date().toISOString(),
           error: timeoutError.message,
-          projectPath: projectPath || null
+          projectPath: projectPath || null,
+          ...(engine && { engine })
         });
 
         proc.kill();
@@ -113,7 +115,8 @@ function startNewSession(driver, prompt, options = {}) {
                   pid,
                   timestamp: new Date().toISOString(),
                   projectPath: projectPath || null,
-                  model: initInfo.model
+                  model: initInfo.model,
+                  ...(engine && { engine })
                 });
 
                 resolve({ pid, sessionId: actualSessionId, ...initInfo });
@@ -156,7 +159,8 @@ function startNewSession(driver, prompt, options = {}) {
         code,
         signal,
         timestamp: new Date().toISOString(),
-        projectPath: projectPath || null
+        projectPath: projectPath || null,
+        ...(engine && { engine })
       });
 
       managedProcesses.delete(sessionId);
@@ -187,7 +191,8 @@ function startNewSession(driver, prompt, options = {}) {
         pid,
         timestamp: new Date().toISOString(),
         error: err.message,
-        projectPath: projectPath || null
+        projectPath: projectPath || null,
+        ...(engine && { engine })
       });
 
       managedProcesses.delete(tempSessionId);
@@ -214,7 +219,7 @@ function startNewSession(driver, prompt, options = {}) {
  * @returns {object} { pid, sessionId }
  */
 function sendToSession(driver, sessionId, prompt, options = {}) {
-  const { cwd, allowedTools, disallowedTools, model, dangerouslySkipPermissions, projectPath, onData, onError, onExit } = options;
+  const { cwd, allowedTools, disallowedTools, model, dangerouslySkipPermissions, projectPath, engine, onData, onError, onExit } = options;
   return new Promise((resolve, reject) => {
     const proc = driver.spawnProcess(
       driver.buildArgs({ prompt, resumeId: sessionId, allowedTools, disallowedTools, model, dangerouslySkipPermissions }),
@@ -230,7 +235,8 @@ function sendToSession(driver, sessionId, prompt, options = {}) {
       proc,
       pid,
       startedAt: new Date(),
-      projectPath: projectPath || null
+      projectPath: projectPath || null,
+      ...(engine && { engine })
     });
 
     // タイムアウト設定
@@ -244,7 +250,8 @@ function sendToSession(driver, sessionId, prompt, options = {}) {
           pid,
           timestamp: new Date().toISOString(),
           error: timeoutError.message,
-          projectPath: projectPath || null
+          projectPath: projectPath || null,
+          ...(engine && { engine })
         });
 
         proc.kill();
@@ -281,7 +288,8 @@ function sendToSession(driver, sessionId, prompt, options = {}) {
                   timestamp: new Date().toISOString(),
                   resumed: true,
                   projectPath: projectPath || null,
-                  model: initInfo.model
+                  model: initInfo.model,
+                  ...(engine && { engine })
                 });
 
                 resolve({ pid, sessionId, ...initInfo });
@@ -323,7 +331,8 @@ function sendToSession(driver, sessionId, prompt, options = {}) {
         code,
         signal,
         timestamp: new Date().toISOString(),
-        projectPath: projectPath || null
+        projectPath: projectPath || null,
+        ...(engine && { engine })
       });
 
       managedProcesses.delete(sessionId);
@@ -352,7 +361,8 @@ function sendToSession(driver, sessionId, prompt, options = {}) {
         pid,
         timestamp: new Date().toISOString(),
         error: err.message,
-        projectPath: projectPath || null
+        projectPath: projectPath || null,
+        ...(engine && { engine })
       });
 
       managedProcesses.delete(sessionId);
@@ -383,7 +393,8 @@ function getManagedProcesses() {
       sessionId,
       pid: info.pid,
       startedAt: info.startedAt,
-      alive: isRunning(info.proc)
+      alive: isRunning(info.proc),
+      ...(info.engine && { engine: info.engine })
     });
   }
   return list;

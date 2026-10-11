@@ -10,7 +10,7 @@
 
 コーディングエージェントの JSONL セッションファイルを監視し、REST API で操作を提供し、セッションイベントを Webhook で配信します。プログラムからエージェントにプロンプトを送信し、応答が完了したらイベントを受け取ることができます。
 
-- 1 プロセス = 1 エンジン(`config.engine` で選択)。今使えるエンジンは `claude-code` と `codex`(OpenAI の Codex CLI。[DETAILS: Codex を使う](./DETAILS-ja.md#codex-を使う)を参照)です
+- 1 つのサーバーで、複数のエンジンを動かせます(`engines` で選択。書かなければ `claude-code` だけ)。今使えるエンジンは `claude-code` と `codex`(OpenAI の Codex CLI)です。接続は 1 つで、Webhook や各 API の `engine` で出し分けます。[DETAILS: 複数のエンジンを動かす](./DETAILS-ja.md#複数のエンジンを動かす)と、[Codex を使う](./DETAILS-ja.md#codex-を使う)を参照
 
 ## できること・できないこと・やらないこと
 
@@ -89,7 +89,7 @@ npm start
 ```
 [index] Logging to: /path/to/coding-agent-pipe/logs/server.log
 [subscribers] No subscribers configured
-coding-agent-pipe v0.2.0 listening on port 3100
+coding-agent-pipe v0.3.0 listening on port 3100
 [watcher] Starting to watch: /home/user/.claude/projects
 [watcher] Watching started
 ```

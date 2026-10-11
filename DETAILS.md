@@ -23,7 +23,7 @@ Complete documentation for coding-agent-pipe
 
 coding-agent-pipe is a thin bridge that watches the session files (JSONL) of a coding agent, delivers them by Webhook, and reads, sends, and cancels sessions through a REST API (and MQTT).
 
-- **1 process = 1 engine**: At startup, `config.engine` selects which coding agent the process handles. Currently `claude-code` and `codex` are available (an unset or empty value means `claude-code`). To handle another engine, run it as a separate process. See [Using Codex](#using-codex).
+- **Several engines in one server**: `engines` selects which coding agents to run. Currently `claude-code` and `codex` are available (if `engines` is not written, only `claude-code`). The connection is one, and Webhooks and the APIs tell the engines apart by `engine`. See [Running multiple engines](#running-multiple-engines) and [Using Codex](#using-codex).
 - It carries over the API and Webhook output of claude-code-pipe (0.9.x). Compared with claude-code-pipe, it **adds** the following.
   - `pipeApp` (which app the event comes from; always `"coding-agent-pipe"`) and `engine` (which agent; for example `"claude-code"`) in Webhooks and in `GET /info`. claude-code-pipe does not send these two fields. When they are absent, a receiver can treat `pipeApp` as `claude-code-pipe` and `engine` as `claude-code`.
 - Routes and fields that claude-code-pipe's documentation did not cover (`GET /health`, `GET /managed`, and the `alive` field of `GET /processes`, among others) are documented here (the features existed in claude-code-pipe as well).
@@ -39,8 +39,8 @@ Copy `config.example.json` to `config.json` and edit it. (`config.json` is read 
 
 ```json
 {
-  "engine": "claude-code",
-  "watchDir": "~/.claude/projects",
+  "engines": ["claude-code"],
+  "watchDirs": { "claude-code": "~/.claude/projects" },
   "port": 3100,
   "apiToken": "YOUR_TOKEN_HERE",
   "projectTitle": "",
@@ -83,8 +83,10 @@ Copy `config.example.json` to `config.json` and edit it. (`config.json` is read 
 
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
-| `engine` | string | No | `"claude-code"` | The coding agent to handle (`claude-code`, `codex`). Unset or empty means `claude-code`. An unknown value makes the process exit with an error at startup |
-| `watchDir` | string | Yes (No when `engine` is `codex`) | - | Directory to watch for session files (e.g., `~/.claude/projects`). If omitted with `codex`, `~/.codex/sessions`. `~` is expanded. **If it does not exist, the server does not create it**: it logs a warning once, keeps running, and starts watching when the directory appears (checked every 5 seconds) |
+| `engines` | array | No | `["claude-code"]` | The coding agents to run (`claude-code`, `codex`). If not written, only `claude-code`. An unknown name makes the process exit with an error at startup. See [Running multiple engines](#running-multiple-engines) |
+| `watchDirs` | object | No | The engine's default location | Per-engine directories to watch for session files (e.g., `{ "codex": "/path" }`). An omitted engine uses its default location (`~/.claude/projects` for `claude-code`, `~/.codex/sessions` for `codex`). `~` is expanded. **If it does not exist, the server does not create it**: it logs a warning once, keeps running, and starts watching when the directory appears (checked every 5 seconds). A key for an engine that is not running is a startup error |
+| `engine` | string | No | `"claude-code"` | **Legacy form**: specify exactly one engine (`claude-code`, `codex`). Unset or empty means `claude-code`. Cannot be written together with `engines` (a startup error) |
+| `watchDir` | string | No | The engine's default location | **Legacy form**: the watch directory of `engine` (or of the default `claude-code`). Cannot be written together with `engines` (a startup error; with `engines`, use `watchDirs`) |
 | `port` | number | No | `3100` | Port number for the server |
 | `apiToken` | string | No | `""` | API authentication token. If set, all requests must include the `Authorization: Bearer TOKEN` header |
 | `projectTitle` | string | No | `null` | User-defined project title (included in Webhook payloads and in `GET /info`) |
@@ -211,17 +213,47 @@ Useful when the side that receives the Webhook sends messages back to coding-age
 
 > **About ports**: If claude-code-pipe runs on the same machine, use different ports (claude-code-pipe's default is 3100).
 
-### Using Codex
+### Running multiple engines
 
-Set `engine` to `codex` to handle OpenAI's Codex CLI instead of Claude Code. The shapes of the API and Webhooks are the same as for `claude-code`.
-
-**Prerequisite**: the `codex` command is on the `PATH` and you are logged in (a ChatGPT account or an API key). Log in outside this server (`codex login`).
-
-**Configuration example** (`watchDir` can be omitted; if omitted, `~/.codex/sessions` is watched):
+One server can run several engines. List the engines to run in `engines`. The connection (port and `callbackUrl`) stays one; the receiver tells the engines apart by the `engine` of Webhooks (`claude-code`, `codex`).
 
 ```json
 {
-  "engine": "codex",
+  "engines": ["claude-code", "codex"],
+  "watchDirs": {
+    "claude-code": "~/.claude/projects",
+    "codex": "~/.codex/sessions"
+  },
+  "port": 3100,
+  "subscribers": [
+    { "url": "http://localhost:1880/webhook", "label": "node-red" }
+  ]
+}
+```
+
+**Rules of the configuration**:
+- If `engines` is not written, **only `claude-code`** runs (existing configurations keep working as they are).
+- `watchDirs` is where each engine's sessions live. If omitted, the engine's default location is used (`~/.claude/projects` for `claude-code`, `~/.codex/sessions` for `codex`). A key for an engine that is not running, or an empty value, is a startup error (so a typo is noticed).
+- The legacy `engine` (one engine only) and `watchDir` still work as they are. They **cannot be written together with `engines`** (the combinations `engine` + `engines` and `watchDir` + `engines` are startup errors, because the meaning would be ambiguous). With `engines`, use `watchDirs`.
+- An unknown engine name stops startup with an error (with the list of available engines).
+
+**The default engine**: `claude-code` if it is running, otherwise the first engine. The existing `engine` and `watchDir` of `GET /info` are the values of the default engine.
+
+**When `engine` is omitted in a new start** (`POST /sessions/new`, MQTT): `claude-code` if it is running. If it is not running and exactly one engine is, that engine. With two or more, `engine` must be given (`400`).
+
+**Read routes**: Only the routes that read, start, or manage sessions split by engine. Container information (`GET /health`, `GET /info`, and so on) and repository information (`GET /git/status`, and so on) stay one. `GET /sessions` and `GET /projects` return the sessions of every running engine together, with `engine` on each item (narrow with `?engine=`). The list of engines is `GET /engine`, and the login state is `GET /engine/:id/auth`.
+
+### Using Codex
+
+Put `codex` in `engines` (or set the legacy `engine` to `codex`) to handle OpenAI's Codex CLI. The shapes of the API and Webhooks are the same as for `claude-code`. It can also run together with `claude-code` ([Running multiple engines](#running-multiple-engines)).
+
+**Prerequisite**: the `codex` command is on the `PATH` and you are logged in (a ChatGPT account or an API key). Log in outside this server (`codex login`).
+
+**Configuration example** (running Codex only. `watchDirs` can be omitted; if omitted, `~/.codex/sessions` is watched. The legacy `"engine": "codex"` behaves the same):
+
+```json
+{
+  "engines": ["codex"],
   "port": 3101,
   "projectTitle": "my-project",
   "callbackUrl": "http://localhost:3101",
@@ -249,7 +281,7 @@ Set `engine` to `codex` to handle OpenAI's Codex CLI instead of Claude Code. The
 | `cancel` | Stops on SIGINT (within a few hundred milliseconds in what was checked; exit code `1`). A cancelled session can be resumed afterwards |
 | MQTT, Windows | Not verified |
 
-> Run `claude-code` and `codex` as separate processes (1 process = 1 engine). If you run both on the same machine, use different ports.
+> `claude-code` and `codex` can run together in one server (`engines: ["claude-code", "codex"]`). If you run them as separate servers, use different ports.
 
 ---
 
@@ -279,6 +311,8 @@ If `apiToken` is unset or empty, authentication is disabled (not recommended in 
 ### Common Query Parameters
 
 - `projectPath` (most read routes): Narrows the result when the same session ID exists in multiple projects.
+- `engine` (the routes that read sessions: `GET /projects`, `GET /sessions`, and the read routes under `/sessions/:id/...`): Narrows the engine (for example `?engine=codex`). If omitted, every running engine is searched. An engine that is not running, or an unknown name, returns `400` with `{ "error": "Unknown engine", "engine": "...", "available": ["claude-code", "codex"] }` (`available` lists the running engines).
+- If the same session ID is found in more than one engine, the response is `409` with `{ "error": "Session found in multiple engines", "sessionId": "...", "engines": ["claude-code", "codex"] }`. Pick one with `?engine=`.
 - The values `true` / `false` are compared as strings (`?excludeEmpty=false`).
 
 ### Info
@@ -298,7 +332,7 @@ curl http://localhost:3100/health
 ```json
 {
   "status": "ok",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "uptime": 123.456
 }
 ```
@@ -326,7 +360,7 @@ curl http://localhost:3100/version
 ```json
 {
   "name": "coding-agent-pipe",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "A pipe for coding agent CLI input/output using JSONL and Hono"
 }
 ```
@@ -351,17 +385,19 @@ curl http://localhost:3100/info
 
 ```json
 {
-  "version": "0.2.0",
+  "version": "0.3.0",
   "os": "linux",
   "communicationMode": "bidirectional",
-  "backendType": "claude_code",
   "pipeApp": "coding-agent-pipe",
   "engine": "claude-code",
   "callbackUrl": "http://localhost:3100",
   "mqttCommandTopic": "claude/pipe-A/send",
   "subscriberCount": 2,
   "projectTitle": "My Project",
-  "watchDir": "~/.claude/projects"
+  "watchDir": "~/.claude/projects",
+  "engines": [
+    { "id": "claude-code", "watchDir": "~/.claude/projects", "default": true }
+  ]
 }
 ```
 
@@ -370,14 +406,76 @@ curl http://localhost:3100/info
 | `version` | string | Current version |
 | `os` | string | One of `"linux"`, `"mac"`, `"windows"` (WSL is `"linux"`) |
 | `communicationMode` | string | `"watch-only"` (no subscribers), `"webhook-only"` (has subscribers but neither `callbackUrl` nor `mqtt.commandTopic`), `"bidirectional"` (has subscribers, and also `callbackUrl` or `mqtt.commandTopic`) |
-| `backendType` | string | Legacy compatibility field (`claude_code`; `codex` for `codex`). Use `engine` to tell which agent it is |
 | `pipeApp` | string | Always `"coding-agent-pipe"` (claude-code-pipe does not send it) |
 | `engine` | string | Which coding agent it is (`"claude-code"` or `"codex"`; claude-code-pipe does not send it) |
 | `callbackUrl` | string\|null | `config.callbackUrl`. `null` if unset |
 | `mqttCommandTopic` | string\|null | `config.mqtt.commandTopic`. `null` if MQTT is not configured. The broker URL and credentials are not included |
 | `subscriberCount` | number | Number of configured `subscribers` |
 | `projectTitle` | string\|null | `config.projectTitle`. `null` if unset |
-| `watchDir` | string | `config.watchDir` |
+| `watchDir` | string | The watch directory of the default engine |
+| `engines` | object[] | The running engines (`id`, `watchDir`, and whether it is the default). Not in claude-code-pipe |
+
+`engine` and `watchDir` are the values of the **default engine** (`claude-code` if it is running, otherwise the first engine). The per-engine state is in `engines`.
+
+#### `GET /engine`
+
+Returns the running engines. The content is the same as `engines` in `GET /info` (it does not call any CLI, so it is cheap).
+
+**Request:**
+
+```bash
+curl http://localhost:3100/engine
+```
+
+**Response:**
+
+```json
+{
+  "engines": [
+    { "id": "claude-code", "watchDir": "~/.claude/projects", "default": true },
+    { "id": "codex", "watchDir": "~/.codex/sessions", "default": false }
+  ]
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | string | Engine identifier (`"claude-code"`, `"codex"`) |
+| `watchDir` | string | Where this engine's sessions live |
+| `default` | boolean | Whether it is the default engine |
+
+#### `GET /engine/:id/auth`
+
+Returns the **login state** of an engine. It runs that engine's CLI (`claude auth status`, `codex login status`), so it is a heavier call than `GET /engine` or `GET /info`.
+
+**Request:**
+
+```bash
+curl http://localhost:3100/engine/codex/auth
+```
+
+**Response (`200`):**
+
+```json
+{
+  "engine": "codex",
+  "loggedIn": true,
+  "method": "chatgpt"
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `engine` | string | Engine identifier |
+| `loggedIn` | boolean | Whether it is logged in |
+| `method` | string\|null | How it is logged in. For `claude-code`, the value the CLI reports (for example `claude.ai`). For `codex`, `chatgpt` or `api-key`. `null` when not logged in or not readable |
+| `error` | string | Present only when the CLI could not be run or its output could not be interpreted: `command not found` (no CLI), `timed out` (did not finish in 10 seconds), `failed to run`, or `unexpected output`. `loggedIn` is `false` then |
+
+- **Email addresses, organization IDs, organization names, and the like are never returned.** Of the CLI's output, only `loggedIn` and `method` are returned (the output itself appears in neither the response nor the log).
+- **The result is kept for 30 seconds** (per engine). However often it is called in a short time, the CLI runs once. A change in the login state shows up after at most 30 seconds.
+- Even when the CLI is unavailable, the response is `200` with `loggedIn: false` and `error`, so it can be received in one shape.
+- An engine that is not running, or an unknown one, returns `404` `{ "error": "Unknown engine", "engine": "...", "available": [...] }`.
+- The `method` of `codex` is read from a sentence in the CLI's output. If a CLI update changes the wording, `method` can become `null` (`loggedIn` is decided by the exit code, so it is not affected).
 
 #### `GET /claude-version`
 
@@ -419,6 +517,7 @@ Return the list of sessions for each project, ordered by session count in descen
 |-------|------|-------------|
 | `excludeAgents` | `true` | Exclude `agent-*` sessions (subagents). `false` includes them |
 | `excludeEmpty` | `true` | Exclude sessions with 0 messages. `false` includes them |
+| `engine` | (all engines) | Narrow to one engine (for example `codex`) |
 
 **Request:**
 
@@ -436,14 +535,14 @@ curl http://localhost:3100/projects
       "projectName": "my-app",
       "sessionCount": 1,
       "sessions": [
-        { "id": "11111111-1111-4111-8111-111111111111", "mtime": 1788220800000 }
+        { "id": "11111111-1111-4111-8111-111111111111", "mtime": 1788220800000, "engine": "claude-code" }
       ]
     }
   ]
 }
 ```
 
-`mtime` is the modification time of the session file (epoch in milliseconds).
+`mtime` is the modification time of the session file (epoch in milliseconds). `engine` is the engine of that session (not in claude-code-pipe). Sessions of every running engine are grouped by `projectPath` (using Claude Code and Codex in the same directory puts both under one project).
 
 #### `GET /sessions`
 
@@ -456,6 +555,7 @@ Return the list of sessions with metadata.
 | `detail` | `false` | When `true`, return the first and last messages as objects (`content`, `timestamp`, `usage`) |
 | `excludeAgents` | `true` | Exclude `agent-*` sessions |
 | `excludeEmpty` | `true` | Exclude sessions with 0 messages |
+| `engine` | (all engines) | Narrow to one engine (for example `codex`) |
 
 **Request:**
 
@@ -471,6 +571,7 @@ curl "http://localhost:3100/sessions?detail=true&excludeEmpty=false"
   "sessions": [
     {
       "id": "11111111-1111-4111-8111-111111111111",
+      "engine": "claude-code",
       "createdAt": "2026-09-01T00:00:00.000Z",
       "lastModifiedAt": "2026-09-01T00:33:21.000Z",
       "messageCount": 11,
@@ -488,6 +589,7 @@ curl "http://localhost:3100/sessions?detail=true&excludeEmpty=false"
 }
 ```
 
+- `engine` is the engine of that session (not in claude-code-pipe). Sessions of every running engine appear in one list (in the order the engines are registered; no sorting).
 - `firstUserMessage` and the similar fields are strings that concatenate the `text` blocks. They are `null` when no matching message exists.
 - `totalTokens` is the sum of the assistant's `input_tokens` and `output_tokens`.
 - With `detail=true`, `firstUserMessage` and the similar fields become objects of the form `{ "content": "...", "timestamp": "..." }` (assistant messages also include `usage`).
@@ -496,7 +598,7 @@ curl "http://localhost:3100/sessions?detail=true&excludeEmpty=false"
 
 Return an array of "signals" that contain no message body (type, time, duration, and body size in bytes). Subagents are not included, because they have separate files and separate session IDs.
 
-**Query parameters:** `projectPath` (optional; when the same ID exists in multiple projects)
+**Query parameters:** `projectPath` (optional; when the same ID exists in multiple projects), `engine` (optional; when the same ID exists in multiple engines)
 
 **Request:**
 
@@ -647,6 +749,7 @@ Start a new session (the agent's CLI is started as a child process). The respons
 | `disallowedTools` | array | No | Tools to forbid |
 | `model` | string | No | Model to use |
 | `dangerouslySkipPermissions` | boolean | No | Skip permission confirmations. If omitted, `send.defaultDangerouslySkipPermissions` applies. **⚠️ Dangerous.** See [Security Considerations](#security-considerations) |
+| `engine` | string | No | The engine to start (`"claude-code"`, `"codex"`). If omitted, `claude-code` (so existing calls keep working); if `claude-code` is not running and exactly one engine is, that engine. An engine that is not running, or an unknown name, returns `400` |
 
 **Request:**
 
@@ -662,6 +765,7 @@ curl -X POST http://localhost:3100/sessions/new \
 {
   "message": "Session started",
   "sessionId": "55555555-5555-4555-8555-555555555555",
+  "engine": "claude-code",
   "pid": 12345,
   "model": "claude-opus-5-5",
   "cwd": "/home/user/projects/my-app",
@@ -673,7 +777,7 @@ curl -X POST http://localhost:3100/sessions/new \
 }
 ```
 
-`codingAgentVersion` is the engine-independent name of the agent version (the same value as `claudeCodeVersion` with `claude-code`; `null` with `codex`). `claudeCodeVersion` is returned only with `claude-code`.
+`codingAgentVersion` is the engine-independent name of the agent version (the same value as `claudeCodeVersion` with `claude-code`; `null` with `codex`). `claudeCodeVersion` is returned only with `claude-code`. `engine` is the engine that was started (not in claude-code-pipe).
 
 At startup, the Webhook `session-started` is delivered (later followed by `user-message-received` and `assistant-response-completed`, and by `process-exit` when the process ends).
 
@@ -684,6 +788,8 @@ At startup, the Webhook `session-started` is delivered (later followed by `user-
 | `400` | `{ "error": "prompt is required" }` | `prompt` is missing or empty |
 | `400` | `{ "error": "projectPath is required", "message": "..." }` | `projectPath` (and `cwd`) is missing |
 | `400` | `{ "error": "projectPath does not exist", "message": "..." }` | The directory does not exist |
+| `400` | `{ "error": "Unknown engine", "engine": "...", "available": ["claude-code", "codex"] }` | `engine` is not running, or unknown (`available` lists the running engines) |
+| `400` | `{ "error": "engine is required", "message": "...", "available": [...] }` | `engine` was omitted and no default engine can be chosen (`claude-code` is not running and two or more engines are) |
 | `500` | `{ "error": "Failed to start new session" }` | Startup failed (the reason appears only in the log; see the note below) |
 
 > **Note: The reason for a `500` is not returned.** It happens in cases such as the following (all are known behaviors inherited from claude-code-pipe; see [Errors and Limits](#errors-and-limits)).
@@ -695,7 +801,7 @@ At startup, the Webhook `session-started` is delivered (later followed by `user-
 
 Send a message to an existing session (starts a new process with the agent's `--resume`).
 
-**Request body:** Same as `POST /sessions/new` (`prompt` and `projectPath` (or `cwd`) are required).
+**Request body:** Same as `POST /sessions/new` (`prompt` and `projectPath` (or `cwd`) are required). `engine` is **looked up from the session ID**, so it is normally not needed. When the same ID exists in more than one engine, choose with `engine` (in the body, or `?engine=`).
 
 **Request:**
 
@@ -712,6 +818,7 @@ curl -X POST http://localhost:3100/sessions/SESSION_ID/send \
   "success": true,
   "message": "Message sent successfully",
   "sessionId": "11111111-1111-4111-8111-111111111111",
+  "engine": "claude-code",
   "pid": 12346,
   "model": "claude-opus-5-5",
   "cwd": "/home/user/projects/my-app",
@@ -722,7 +829,7 @@ curl -X POST http://localhost:3100/sessions/SESSION_ID/send \
 }
 ```
 
-**Errors:** `400` (`prompt is required` / `projectPath is required` / `projectPath does not exist`; same as `POST /sessions/new`), `404` `{ "error": "Session not found" }` (the session is not found), `500` `{ "error": "Failed to send message" }`.
+**Errors:** `400` (`prompt is required` / `projectPath is required` / `projectPath does not exist`; same as `POST /sessions/new`), `404` `{ "error": "Session not found" }` (the session is not found), `409` `{ "error": "Session found in multiple engines", "sessionId": "...", "engines": [...] }` (the same ID exists in more than one engine; choose with `engine`), `400` `{ "error": "Unknown engine", ... }` (`engine` is unknown), `500` `{ "error": "Failed to send message" }`. The engine that was used is in `engine` of the response.
 
 > **If a message is sent twice in a row to the same session**, the first process is dropped from management and can no longer be stopped by `DELETE /processes` or `cancel` (a known behavior; see [Errors and Limits](#errors-and-limits)).
 
@@ -768,10 +875,12 @@ If `config.mqtt` is omitted (or `url` or `commandTopic` is missing), the MQTT ch
 | `prompt` | string | Yes | The prompt to send |
 | `projectPath` | string | No | Working directory for a **new** session. Ignored when `sessionId` is present. **If omitted, the command runs in the server's startup directory** (unlike REST, where `projectPath` is required) |
 | `sessionId` | string | No | If given, send to the existing session (`--resume`). If omitted, a new session is started |
+| `engine` | string | No | The engine for a new session. If omitted, `claude-code` (or the only engine, if `claude-code` is not running). With `sessionId`, the engine is looked up from the session ID, so it is normally not needed; use it when the same ID exists in more than one engine |
 | `model` | string | No | Model to use |
 
 - Allowed tools come from `config.send.defaultAllowedTools` (the REST send APIs do not use it).
 - QoS is 0 (fire and forget), and the publisher receives no acknowledgment. A command published while the connection to the broker is down is silently lost.
+- **Commands whose engine cannot be decided are also silently discarded**: an unknown (not running) `engine`, a new session with no default engine to choose, or a resume whose ID exists in more than one engine starts nothing and logs an error (MQTT has nowhere to send a response). When `sessionId` is in no engine, the resume is tried with the default engine, as before.
 - **Malformed commands are silently discarded**: a command with a missing or empty `prompt`, or one that is not JSON, starts nothing and emits no Webhook. The error appears only in the server log (`[mqtt] Command missing required field: prompt`, `[mqtt] Invalid JSON payload: ...`).
 - If the broker goes down, the server keeps running (`/health` still responds). When the broker returns, the server reconnects and resubscribes. If the broker is not there at startup, the server still starts and connects later. If authentication fails, the server also keeps running (the log shows `Connection error: Connection refused: Bad username or password`).
 - `mqtt.password` is never exposed. Only `commandTopic` is included in the Webhook payload's `mqttCommandTopic` and in `GET /info`.
@@ -829,7 +938,8 @@ curl http://localhost:3100/processes
       "sessionId": "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
       "pid": 12345,
       "startedAt": "2026-09-01T00:00:00.000Z",
-      "alive": true
+      "alive": true,
+      "engine": "claude-code"
     }
   ]
 }
@@ -841,6 +951,7 @@ curl http://localhost:3100/processes
 | `pid` | number | Process ID |
 | `startedAt` | string | Time the process started (ISO 8601) |
 | `alive` | boolean | Whether the process is alive |
+| `engine` | string | The engine of that process (not in claude-code-pipe) |
 
 If there are no managed processes, the response is `{ "processes": [] }`.
 
@@ -862,7 +973,8 @@ curl http://localhost:3100/managed
     "sessionId": "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
     "pid": 12345,
     "startedAt": "2026-09-01T00:00:00.000Z",
-    "alive": true
+    "alive": true,
+    "engine": "claude-code"
   }
 ]
 ```
@@ -1145,7 +1257,6 @@ A Webhook receives JSON with the following structure by `POST` (`Content-Type: a
 | `callbackUrl` | string\|null | `config.callbackUrl` (`null` if unset). The URL a receiver uses to come back to this pipe |
 | `os` | string | `"mac"`, `"linux"`, `"windows"` (WSL is `"linux"`) |
 | `communicationMode` | string | `"watch-only"`, `"webhook-only"`, `"bidirectional"` (see [`GET /info`](#get-info)) |
-| `backendType` | string | Legacy compatibility field (`claude_code`; `codex` for `codex`) |
 | `pipeApp` | string | Always `"coding-agent-pipe"`. claude-code-pipe does not send it (when absent, it can be treated as `claude-code-pipe`) |
 | `engine` | string | Which coding agent it is (`"claude-code"` or `"codex"`). claude-code-pipe does not send it (when absent, it can be treated as `claude-code`) |
 | `mqttCommandTopic` | string | `config.mqtt.commandTopic` (only when set) |
@@ -1170,6 +1281,8 @@ A Webhook receives JSON with the following structure by `POST` (`Content-Type: a
 | `responseTime` | number\|null | Seconds elapsed since the previous message |
 
 #### Process events (`session-started`, `session-error`, `session-timeout`, `cancel-initiated`, `process-exit`)
+
+The common `engine` is the value of the engine of that process's session (the engine that was started, even when several engines are running).
 
 | Field | Type | Description |
 |-------|------|-------------|
@@ -1202,7 +1315,7 @@ Message events are emitted by **watching the session files**, so they also cover
 ```json
 {
   "type": "user-message-received",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "sessionId": "11111111-1111-4111-8111-111111111111",
   "timestamp": "2026-09-01T00:33:20.000Z",
   "cwdPath": "/home/user/workspace/repos/coding-agent-pipe",
@@ -1210,7 +1323,6 @@ Message events are emitted by **watching the session files**, so they also cover
   "callbackUrl": "http://localhost:3100",
   "os": "linux",
   "communicationMode": "bidirectional",
-  "backendType": "claude_code",
   "pipeApp": "coding-agent-pipe",
   "engine": "claude-code",
   "projectPath": "/home/user/projects/my-app",
@@ -1229,7 +1341,7 @@ Message events are emitted by **watching the session files**, so they also cover
 ```json
 {
   "type": "assistant-response-completed",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "sessionId": "11111111-1111-4111-8111-111111111111",
   "timestamp": "2026-09-01T00:33:21.000Z",
   "cwdPath": "/home/user/workspace/repos/coding-agent-pipe",
@@ -1237,7 +1349,6 @@ Message events are emitted by **watching the session files**, so they also cover
   "callbackUrl": "http://localhost:3100",
   "os": "linux",
   "communicationMode": "bidirectional",
-  "backendType": "claude_code",
   "pipeApp": "coding-agent-pipe",
   "engine": "claude-code",
   "projectPath": "/home/user/projects/my-app",
@@ -1265,7 +1376,7 @@ Message events are emitted by **watching the session files**, so they also cover
 ```json
 {
   "type": "session-started",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "sessionId": "55555555-5555-4555-8555-555555555555",
   "timestamp": "2026-09-01T00:00:00.000Z",
   "cwdPath": "/home/user/workspace/repos/coding-agent-pipe",
@@ -1273,7 +1384,6 @@ Message events are emitted by **watching the session files**, so they also cover
   "callbackUrl": "http://localhost:3100",
   "os": "linux",
   "communicationMode": "bidirectional",
-  "backendType": "claude_code",
   "pipeApp": "coding-agent-pipe",
   "engine": "claude-code",
   "projectPath": "/home/user/projects/my-app",
@@ -1288,7 +1398,7 @@ Message events are emitted by **watching the session files**, so they also cover
 ```json
 {
   "type": "process-exit",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "sessionId": "55555555-5555-4555-8555-555555555555",
   "timestamp": "2026-09-01T00:00:05.000Z",
   "cwdPath": "/home/user/workspace/repos/coding-agent-pipe",
@@ -1296,7 +1406,6 @@ Message events are emitted by **watching the session files**, so they also cover
   "callbackUrl": "http://localhost:3100",
   "os": "linux",
   "communicationMode": "bidirectional",
-  "backendType": "claude_code",
   "pipeApp": "coding-agent-pipe",
   "engine": "claude-code",
   "projectPath": "/home/user/projects/my-app",
@@ -1350,6 +1459,7 @@ For the errors specific to each route, see the section of that route.
 - There is no automatic response to `OPTIONS` (if CORS is needed, use a reverse proxy or similar).
 - Routing is case-sensitive (`/Health` is 404). A trailing slash (`/health/`) makes no difference.
 - Attachments are saved to `/tmp/coding-agent-pipe/` (claude-code-pipe used `/tmp/claude-code-pipe/`).
+- **`backendType` is not sent.** claude-code-pipe put `backendType` (`claude_code`) in every Webhook payload and in `GET /info`; coding-agent-pipe unified it into `engine` (`claude-code`, `codex`), which has the same meaning. The spelling of the value also differs (`claude_code` vs `claude-code`). Receivers should read `engine`; when it is absent, treat it as `claude-code`.
 
 ### Known behaviors (inherited from claude-code-pipe)
 
@@ -1395,7 +1505,13 @@ Then edit it to suit your environment.
 
 **Symptom:** `[index] Unknown engine: "..."`
 
-**Solution:** `config.engine` contains an unsupported value. Currently `claude-code` and `codex` are available (an unset value means `claude-code`).
+**Solution:** `config.engines` (or the legacy `config.engine`) contains an unsupported value. Currently `claude-code` and `codex` are available (if `engines` is not written, only `claude-code`).
+
+---
+
+**Symptom:** `[index] config.watchDir cannot be used together with config.engines` (or `config.engine cannot be used together with config.engines`, `config.watchDirs has "..."`)
+
+**Solution:** `engines` cannot be written together with the legacy `engine` and `watchDir` (the meaning would be ambiguous). When you use `engines`, give the locations in `watchDirs` (per engine). `watchDirs` accepts only engines listed in `engines`.
 
 ---
 
@@ -1504,6 +1620,8 @@ coding-agent-pipe/
 │   ├── package-info.js           Package information and the pipeApp value
 │   ├── core/                     Engine-independent parts
 │   │   ├── api.js                REST routes (read, send, management, files, git)
+│   │   ├── engines.js            Registry of engines (bundles the adapters in use)
+│   │   ├── auth.js               Login-state check of an engine (GET /engine/:id/auth)
 │   │   ├── process.js            Management of started processes
 │   │   ├── canceller.js          Cancel
 │   │   ├── deliver.js            Webhook delivery
@@ -1513,8 +1631,9 @@ coding-agent-pipe/
 │   │   ├── platform.js           OS detection
 │   │   └── sources/              Observation sources (read appends to session files)
 │   └── adapters/                 Engine-specific parts
-│       ├── index.js              Select one adapter by config.engine
-│       └── claude-code/          Adapter for Claude Code
+│       ├── index.js              Load the adapters to run, following the configuration (engines)
+│       ├── claude-code/          Adapter for Claude Code
+│       └── codex/                Adapter for Codex
 ├── schema/event.schema.json      Contract for Webhooks and GET /info
 └── config.example.json
 ```
@@ -1525,11 +1644,13 @@ coding-agent-pipe/
 
 | Item | Role |
 |-------|-------------|
-| `id`, `backendType` | The engine's identifier and the legacy compatibility field |
+| `id` | The engine's identifier |
 | `observe`, `parse(line)` | How to observe, and how to interpret one line |
 | `resolveProject`, `isSubagent`, `isAgentSession`, `sessionIdFromPath` | Derive the project and so on from where a session comes from |
 | `sessions` | `{ list, locate, read }`. The entry point to session data used by REST reads |
 | `spawn` | `{ buildArgs, spawnProcess, parseInit }`. Starting processes |
+| `auth` | `{ command, args, parse }`. The login-state check (`GET /engine/:id/auth`) |
+| `defaultWatchDir` | The default location when `watchDirs` has none (the module's `defaultWatchDir` is the same value) |
 | `mountRoutes(api)` | Engine-specific REST routes (optional; `claude-code` provides `GET /claude-version`) |
 
 To add a new engine, create `src/adapters/<engine>/index.js` and satisfy this interface.

@@ -11,7 +11,8 @@ import { Hono } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
 import { serve } from '@hono/node-server';
 import { packageJson } from './package-info.js';
-import { loadAdapter } from './adapters/index.js';
+import { loadAdapters, DEFAULT_ENGINE } from './adapters/index.js';
+import { createEngines } from './core/engines.js';
 import { createSource } from './core/sources/index.js';
 import { createApiRouter, cleanupOldAttachments } from './core/api.js';
 import { setupSubscribers } from './core/deliver.js';
@@ -30,10 +31,11 @@ try {
   process.exit(1);
 }
 
-// エンジンの adapter を読み込む(1プロセス = 1エンジン。未指定は claude-code)
-let adapter;
+// 設定で動かすエンジンの adapter を読み込み、登録簿に入れる(engines 未指定は claude-code だけ)
+let engines;
 try {
-  adapter = await loadAdapter(config.engine || 'claude-code', config);
+  const { adapters, defaultId } = await loadAdapters(config);
+  engines = createEngines(adapters, defaultId, DEFAULT_ENGINE);
 } catch (error) {
   console.error(`[index] ${error.message}`);
   process.exit(1);
@@ -99,14 +101,14 @@ function writeLog(category, data) {
 
 console.log(`[index] Logging to: ${logFilePath}`);
 
-// イベントの観測元を作成(adapter の observe に従う)
-const source = createSource(adapter, config);
+// イベントの観測元を作成(エンジンごとに、adapter の observe に従う)
+const source = createSource(engines);
 
 // Watch 系 API ルーターをマウント
-app.route('/', createApiRouter(config, adapter));
+app.route('/', createApiRouter(config, engines));
 
 // subscribers をセットアップ
-setupSubscribers(config.subscribers, source, processEvents, config, adapter);
+setupSubscribers(config.subscribers, source, processEvents, config, engines);
 
 // 観測元の message イベントは生のセッション内容（実行コマンド全文など）を含むため、
 // server.log には記録しない（subscribers への配信はこれとは別経路）
@@ -193,7 +195,7 @@ const server = serve({ fetch: app.fetch, port }, () => {
   setInterval(() => cleanupOldAttachments(config), 60 * 60 * 1000);
 
   // MQTT コマンド受信チャネル（config.mqtt 未設定時は何もしない）
-  mqttClient = setupMqttReceiver(config, adapter);
+  mqttClient = setupMqttReceiver(config, engines);
 });
 
 // Graceful shutdown

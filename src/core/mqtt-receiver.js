@@ -14,10 +14,10 @@ import { isWindowsNonWSL } from './platform.js';
 /**
  * MQTT コマンド受信を開始する
  * @param {object} config - アプリケーション設定
- * @param {object} adapter - エンジンの adapter(adapter.spawn でプロセスを起動する)
+ * @param {object} engines - エンジンの登録簿(core/engines.js。コマンドの engine、または sessionId から引いたエンジンの adapter.spawn でプロセスを起動する)
  * @returns {import('mqtt').MqttClient|null} 接続した MQTT クライアント（未設定・非対応環境ではnull）
  */
-function setupMqttReceiver(config, adapter) {
+function setupMqttReceiver(config, engines) {
   const mqttConfig = config.mqtt;
   if (!mqttConfig || !mqttConfig.url || !mqttConfig.commandTopic) {
     return null;
@@ -63,7 +63,7 @@ function setupMqttReceiver(config, adapter) {
       return;
     }
 
-    const { prompt, projectPath, sessionId, model } = command;
+    const { prompt, projectPath, sessionId, model, engine } = command;
     if (!prompt) {
       console.error('[mqtt] Command missing required field: prompt');
       return;
@@ -78,10 +78,33 @@ function setupMqttReceiver(config, adapter) {
 
     try {
       if (sessionId) {
-        const result = await sendToSession(adapter.spawn, sessionId, prompt, { cwd: projectPath, projectPath, allowedTools, model, ...callbacks });
+        // セッション ID から、どのエンジンのセッションかを引く(engine を指定すれば、そのエンジンだけで探す)
+        const found = await engines.findSession(sessionId, undefined, engine);
+        if (found.status === 'unknown-engine') {
+          console.error(`[mqtt] Unknown engine: ${JSON.stringify(found.engine)} (available: ${engines.ids().join(', ')})`);
+          return;
+        }
+        if (found.status === 'conflict') {
+          console.error(`[mqtt] Session ${sessionId} found in multiple engines (${found.engines.join(', ')}); specify "engine" in the command`);
+          return;
+        }
+        // 見つからないときは、これまでどおり、暗黙の既定のエンジンで再開を試みる(無ければ、起動を止める)
+        const adapter = found.status === 'found' ? found.adapter : engines.implicitDefault;
+        if (!adapter) {
+          console.error(`[mqtt] Session ${sessionId} not found, and no default engine is available; specify "engine" in the command`);
+          return;
+        }
+        const result = await sendToSession(adapter.spawn, sessionId, prompt, { engine: adapter.id, cwd: projectPath, projectPath, allowedTools, model, ...callbacks });
         console.log(`[mqtt] Sent to existing session: sessionId=${result.sessionId}`);
       } else {
-        const result = await startNewSession(adapter.spawn, prompt, { cwd: projectPath, projectPath, allowedTools, model, ...callbacks });
+        // 新規起動: engine の指定が無ければ、暗黙の既定のエンジン
+        const target = engine === undefined || engine === null || engine === '' ? engines.implicitDefault : engines.get(engine);
+        if (!target) {
+          const reason = engine === undefined || engine === null || engine === '' ? 'engine is required (no default engine is available)' : `Unknown engine: ${JSON.stringify(engine)}`;
+          console.error(`[mqtt] ${reason} (available: ${engines.ids().join(', ')})`);
+          return;
+        }
+        const result = await startNewSession(target.spawn, prompt, { engine: target.id, cwd: projectPath, projectPath, allowedTools, model, ...callbacks });
         console.log(`[mqtt] Started new session: sessionId=${result.sessionId}`);
       }
     } catch (error) {

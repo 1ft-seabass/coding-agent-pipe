@@ -22,7 +22,7 @@ function cancel(sessionId, cancelTimeoutMs = 3000) {
     return null;
   }
 
-  const { proc, pid, projectPath } = managed;
+  const { proc, pid, projectPath, engine } = managed;
 
   console.log(`[canceller] Cancelling session: sessionId=${sessionId}, pid=${pid}`);
 
@@ -31,7 +31,8 @@ function cancel(sessionId, cancelTimeoutMs = 3000) {
     sessionId,
     pid,
     timestamp: new Date().toISOString(),
-    projectPath: projectPath || null
+    projectPath: projectPath || null,
+    ...(engine && { engine })
   });
 
   // まず SIGINT を送る

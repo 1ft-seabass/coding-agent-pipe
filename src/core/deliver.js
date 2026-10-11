@@ -2,7 +2,7 @@
  * deliver.js - subscribers への HTTP POST 配信
  *
  * config.subscribers の配列を読み、レベルに応じて HTTP POST で配信する。
- * どのエンジンのイベントかは adapter(resolveProject / isSubagent / backendType)が教える。
+ * どのエンジンのイベントかは adapter(resolveProject / isSubagent / id)が教える。
  * プロトタイプ実装。
  */
 
@@ -51,9 +51,9 @@ function getProjectGitInfo(projectPath) {
  * @param {EventEmitter} source - イベントの観測元(message イベントを発火する)
  * @param {EventEmitter} processEvents - sender の processEvents
  * @param {Object} config - 設定オブジェクト（projectTitle 取得用）
- * @param {Object} adapter - エンジンの adapter
+ * @param {Object} engines - エンジンの登録簿(core/engines.js)
  */
-function setupSubscribers(subscribers, source, processEvents, config, adapter) {
+function setupSubscribers(subscribers, source, processEvents, config, engines) {
   if (!subscribers || subscribers.length === 0) {
     console.log('[subscribers] No subscribers configured');
     return;
@@ -78,7 +78,11 @@ function setupSubscribers(subscribers, source, processEvents, config, adapter) {
     communicationMode = 'webhook-only';
   }
 
-  const serverInfo = { cwdPath, cwdName, projectTitle, callbackUrl, os: getOsInfo(), communicationMode, mqttCommandTopic, backendType: adapter.backendType, pipeApp: PIPE_APP, engine: adapter.id };
+  // エンジンによらない、サーバーの情報。engine は、イベントごとに(そのエンジンの adapter から)入れる
+  const serverInfo = { cwdPath, cwdName, projectTitle, callbackUrl, os: getOsInfo(), communicationMode, mqttCommandTopic, pipeApp: PIPE_APP };
+  const withEngine = (adapter) => ({ ...serverInfo, engine: adapter.id });
+  // イベントのエンジン(event.engine)の adapter を引く。付いていない・未知のときは、既定のエンジン
+  const adapterFor = (event) => engines.get(event.engine) ?? engines.default;
 
   // セッションごとの最終タイムスタンプ（応答時間計算用）
   const sessionTimestamps = new Map();
@@ -88,8 +92,11 @@ function setupSubscribers(subscribers, source, processEvents, config, adapter) {
     // 応答時間は、イベントごとに 1 回だけ計算する(subscriber ごとに計算すると、最後のタイムスタンプが
     // 先に更新されて、2 件目以降の subscriber では 0 になる)
     const responseTime = trackResponseTime(event, sessionTimestamps);
+    // 観測元が付けた event.engine で、そのエンジンの adapter を引く(付いていなければ既定のエンジン)
+    const adapter = adapterFor(event);
+    const eventServerInfo = withEngine(adapter);
     for (const subscriber of subscribers) {
-      handleSubscriberEvent(subscriber, event, responseTime, serverInfo, adapter);
+      handleSubscriberEvent(subscriber, event, responseTime, eventServerInfo, adapter);
     }
   });
 
@@ -97,31 +104,31 @@ function setupSubscribers(subscribers, source, processEvents, config, adapter) {
   if (processEvents) {
     processEvents.on('session-started', (event) => {
       for (const subscriber of subscribers) {
-        handleProcessEvent(subscriber, 'session-started', event, serverInfo);
+        handleProcessEvent(subscriber, 'session-started', event, withEngine(adapterFor(event)));
       }
     });
 
     processEvents.on('session-error', (event) => {
       for (const subscriber of subscribers) {
-        handleProcessEvent(subscriber, 'session-error', event, serverInfo);
+        handleProcessEvent(subscriber, 'session-error', event, withEngine(adapterFor(event)));
       }
     });
 
     processEvents.on('session-timeout', (event) => {
       for (const subscriber of subscribers) {
-        handleProcessEvent(subscriber, 'session-timeout', event, serverInfo);
+        handleProcessEvent(subscriber, 'session-timeout', event, withEngine(adapterFor(event)));
       }
     });
 
     processEvents.on('cancel-initiated', (event) => {
       for (const subscriber of subscribers) {
-        handleProcessEvent(subscriber, 'cancel-initiated', event, serverInfo);
+        handleProcessEvent(subscriber, 'cancel-initiated', event, withEngine(adapterFor(event)));
       }
     });
 
     processEvents.on('process-exit', (event) => {
       for (const subscriber of subscribers) {
-        handleProcessEvent(subscriber, 'process-exit', event, serverInfo);
+        handleProcessEvent(subscriber, 'process-exit', event, withEngine(adapterFor(event)));
       }
     });
   }
@@ -150,7 +157,6 @@ function handleProcessEvent(subscriber, eventType, event, serverInfo) {
     callbackUrl: serverInfo.callbackUrl,
     os: serverInfo.os,
     communicationMode: serverInfo.communicationMode,
-    backendType: serverInfo.backendType,
     pipeApp: serverInfo.pipeApp,
     engine: serverInfo.engine,
     ...(serverInfo.mqttCommandTopic && { mqttCommandTopic: serverInfo.mqttCommandTopic }),
@@ -222,7 +228,6 @@ function handleSubscriberEvent(subscriber, event, responseTime, serverInfo, adap
       callbackUrl: serverInfo.callbackUrl,
       os: serverInfo.os,
       communicationMode: serverInfo.communicationMode,
-      backendType: serverInfo.backendType,
       pipeApp: serverInfo.pipeApp,
       engine: serverInfo.engine,
       ...(serverInfo.mqttCommandTopic && { mqttCommandTopic: serverInfo.mqttCommandTopic }),
@@ -262,7 +267,6 @@ function handleSubscriberEvent(subscriber, event, responseTime, serverInfo, adap
       callbackUrl: serverInfo.callbackUrl,
       os: serverInfo.os,
       communicationMode: serverInfo.communicationMode,
-      backendType: serverInfo.backendType,
       pipeApp: serverInfo.pipeApp,
       engine: serverInfo.engine,
       ...(serverInfo.mqttCommandTopic && { mqttCommandTopic: serverInfo.mqttCommandTopic }),

@@ -15,6 +15,7 @@ import { getGitStatus, getGitLog, isPathGitIgnored } from './git-info.js';
 
 import { packageJson, PIPE_APP } from '../package-info.js';
 import { query } from './http-utils.js';
+import { createAuthChecker } from './auth.js';
 
 // /attachments の保存先
 const ATTACHMENTS_TMP_DIR = '/tmp/coding-agent-pipe';
@@ -77,13 +78,85 @@ const IMAGE_MIME_TYPES = {
 /**
  * API ルーターを作成
  * @param {object} config - 設定オブジェクト
- * @param {object} adapter - エンジンの adapter
+ * @param {object} engines - エンジンの登録簿(core/engines.js)
  * @returns {Hono}
  */
-function createApiRouter(config, adapter) {
+function createApiRouter(config, engines) {
   const api = new Hono();
-  // セッションデータの入口(一覧・検索・読み込み)は adapter が持つ
-  const store = adapter.sessions;
+  // GET /info の engine・watchDir は、既定のエンジンの値
+  const adapter = engines.default;
+
+  // セッションデータの入口(一覧・検索・読み込み)は、エンジンごとの adapter.sessions が持つ。
+  // 読み取り系のルートは、動かしている全エンジンを対象にする(?engine= で絞れる)
+
+  /** 動かしているエンジンの要約(GET /info の engines と GET /engine) */
+  function engineSummaries() {
+    return engines.list().map((a) => ({ id: a.id, watchDir: a.watchDir, default: a === engines.default }));
+  }
+
+  /**
+   * ?engine= を解釈して、対象にする adapter の配列を返す。指定が無ければ全エンジン。
+   * 未知(動かしていない)エンジンなら、400 の応答を返す
+   */
+  function targetAdapters(c) {
+    const target = engines.target(query(c, 'engine'));
+    if (target.unknown) return { response: unknownEngine(c, target.engine) };
+    return { adapters: target.adapters };
+  }
+
+  /** 未知(動かしていない)エンジンを指定されたときの 400 の応答 */
+  function unknownEngine(c, id) {
+    return c.json({ error: 'Unknown engine', engine: id, available: engines.ids() }, 400);
+  }
+
+  /** 対象のエンジンのセッションを集める。各セッションに、どのエンジンのものか(adapter)を付ける */
+  async function listAllSessions(adapters) {
+    const lists = await Promise.all(adapters.map(async (a) => {
+      const sessions = await a.sessions.list();
+      return sessions.map((s) => ({ ...s, adapter: a }));
+    }));
+    return lists.flat();
+  }
+
+  /**
+   * セッション ID から、どのエンジンのセッションかを引く(engineId、省略時は ?engine= で絞れる)
+   * @returns {Promise<{adapter: object, location: string}|{response: Response}>}
+   *   見つからなければ 404、複数のエンジンで見つかれば 409、engine が未知なら 400 の応答を response に入れる
+   */
+  async function findSession(c, sessionId, projectPath, engineId = query(c, 'engine')) {
+    const found = await engines.findSession(sessionId, projectPath, engineId);
+    switch (found.status) {
+      case 'found':
+        return found;
+      case 'unknown-engine':
+        return { response: unknownEngine(c, found.engine) };
+      case 'conflict':
+        return { response: c.json({ error: 'Session found in multiple engines', sessionId, engines: found.engines }, 409) };
+      default:
+        return { response: c.json({ error: 'Session not found' }, 404) };
+    }
+  }
+
+  /**
+   * 新規起動のエンジンを決める。engine の指定が無ければ、暗黙の既定(claude-code。動かしていなければ、
+   * 動かしているエンジンが 1 つだけのときはそれ)。決められなければ 400
+   * @returns {{adapter: object}|{response: Response}}
+   */
+  function resolveStartEngine(c, engineId) {
+    if (engineId === undefined || engineId === null || engineId === '') {
+      if (engines.implicitDefault) return { adapter: engines.implicitDefault };
+      return {
+        response: c.json({
+          error: 'engine is required',
+          message: 'No default engine is available; specify one of the running engines',
+          available: engines.ids()
+        }, 400)
+      };
+    }
+    const adapter = typeof engineId === 'string' ? engines.get(engineId) : undefined;
+    if (!adapter) return { response: unknownEngine(c, engineId) };
+    return { adapter };
+  }
 
   // デフォルト値を取得
   const defaultDangerouslySkipPermissions = config?.send?.defaultDangerouslySkipPermissions || false;
@@ -94,15 +167,16 @@ function createApiRouter(config, adapter) {
   /**
    * セッションのメタデータを取得（キャッシュ付き）
    */
-  async function getSessionMetadata(sessionId, filePath, mtime) {
-    // キャッシュがあり、mtimeが同じなら返す
-    const cached = sessionMetadataCache.get(sessionId);
+  async function getSessionMetadata(sessionAdapter, sessionId, filePath, mtime) {
+    // キャッシュがあり、mtimeが同じなら返す(セッション ID がエンジンをまたいで重ならない保証は無いので、キーにエンジンを含める)
+    const cacheKey = `${sessionAdapter.id}:${sessionId}`;
+    const cached = sessionMetadataCache.get(cacheKey);
     if (cached && cached.mtime === mtime) {
       return cached.metadata;
     }
 
     // キャッシュがないか古い場合は再パース
-    const events = await store.read(filePath);
+    const events = await sessionAdapter.sessions.read(filePath);
 
     // メッセージを role でフィルタ
     const userMessages = events.filter(e => e.message && e.message.role === 'user');
@@ -129,11 +203,12 @@ function createApiRouter(config, adapter) {
     };
 
     // プロジェクト情報を抽出
-    const projectPath = adapter.resolveProject(filePath);
+    const projectPath = sessionAdapter.resolveProject(filePath);
     const projectName = projectPath ? path.basename(projectPath) : null;
 
     const metadata = {
       id: sessionId,
+      engine: sessionAdapter.id,
       createdAt: events.length > 0 ? events[0].timestamp : null,
       lastModifiedAt: events.length > 0 ? events[events.length - 1].timestamp : null,
       messageCount: userMessages.length + assistantMessages.length,
@@ -149,7 +224,7 @@ function createApiRouter(config, adapter) {
     };
 
     // キャッシュに保存
-    sessionMetadataCache.set(sessionId, {
+    sessionMetadataCache.set(cacheKey, {
       mtime,
       metadata
     });
@@ -185,21 +260,40 @@ function createApiRouter(config, adapter) {
       version: packageJson.version,
       os: getOsInfo(),
       communicationMode,
-      backendType: adapter.backendType,
       pipeApp: PIPE_APP,
       engine: adapter.id,
       callbackUrl: config.callbackUrl || null,
       mqttCommandTopic,
       subscriberCount,
       projectTitle: config.projectTitle || null,
-      watchDir: config.watchDir
+      watchDir: adapter.watchDir,
+      engines: engineSummaries()
     });
+  });
+
+  // GET /engine - 動かしているエンジンの一覧(GET /info の engines と同じ内容)
+  api.get('/engine', async (c) => {
+    return c.json({ engines: engineSummaries() });
+  });
+
+  // GET /engine/:id/auth - エンジンのログイン状態(CLI を実行するので重い。結果は 30 秒覚える)
+  // 返すのは、ログインしているか(loggedIn)と、その方法(method)だけ。メールアドレスなどは返さない
+  const authChecker = createAuthChecker();
+  api.get('/engine/:id/auth', async (c) => {
+    const id = c.req.param('id');
+    const target = engines.get(id);
+    if (!target) {
+      return c.json({ error: 'Unknown engine', engine: id, available: engines.ids() }, 404);
+    }
+    return c.json(await authChecker.check(target));
   });
 
   // GET /projects - プロジェクト一覧
   api.get('/projects', async (c) => {
     try {
-      const sessions = await store.list();
+      const target = targetAdapters(c);
+      if (target.response) return target.response;
+      const sessions = await listAllSessions(target.adapters);
 
       // クエリパラメータからフィルタ条件を取得（デフォルト: agent セッションと空セッションを除外）
       const excludeAgents = query(c, 'excludeAgents') !== 'false'; // デフォルト true
@@ -210,11 +304,11 @@ function createApiRouter(config, adapter) {
 
       for (const session of sessions) {
         // agent-* セッションを除外（オプション）
-        if (excludeAgents && adapter.isAgentSession(session.id)) {
+        if (excludeAgents && session.adapter.isAgentSession(session.id)) {
           continue;
         }
 
-        const projectPath = adapter.resolveProject(session.path);
+        const projectPath = session.adapter.resolveProject(session.path);
         const projectName = projectPath ? path.basename(projectPath) : null;
 
         if (!projectPath) continue;
@@ -232,7 +326,8 @@ function createApiRouter(config, adapter) {
         project.sessionCount++;
         project.sessions.push({
           id: session.id,
-          mtime: session.mtime
+          mtime: session.mtime,
+          engine: session.adapter.id
         });
       }
 
@@ -242,10 +337,9 @@ function createApiRouter(config, adapter) {
           // 各セッションのメタデータを取得してフィルタ
           const filteredSessions = [];
           for (const session of project.sessions) {
-            const sessionFiles = await store.list();
-            const sessionFile = sessionFiles.find(s => s.id === session.id);
+            const sessionFile = sessions.find(s => s.id === session.id && s.adapter.id === session.engine);
             if (sessionFile) {
-              const metadata = await getSessionMetadata(session.id, sessionFile.path, sessionFile.mtime);
+              const metadata = await getSessionMetadata(sessionFile.adapter, session.id, sessionFile.path, sessionFile.mtime);
               if (metadata.messageCount > 0) {
                 filteredSessions.push(session);
               }
@@ -279,7 +373,9 @@ function createApiRouter(config, adapter) {
   // GET /sessions - セッション一覧
   api.get('/sessions', async (c) => {
     try {
-      const sessions = await store.list();
+      const target = targetAdapters(c);
+      if (target.response) return target.response;
+      const sessions = await listAllSessions(target.adapters);
       const detail = query(c, 'detail') === 'true';
 
       // クエリパラメータからフィルタ条件を取得（デフォルト: agent セッションと空セッションを除外）
@@ -291,13 +387,13 @@ function createApiRouter(config, adapter) {
 
       // agent-* セッションを除外（オプション）
       if (excludeAgents) {
-        filteredSessions = filteredSessions.filter(s => !adapter.isAgentSession(s.id));
+        filteredSessions = filteredSessions.filter(s => !s.adapter.isAgentSession(s.id));
       }
 
       if (!detail) {
         // シンプル版: メタデータのみ
         let metadataList = await Promise.all(
-          filteredSessions.map(s => getSessionMetadata(s.id, s.path, s.mtime))
+          filteredSessions.map(s => getSessionMetadata(s.adapter, s.id, s.path, s.mtime))
         );
 
         // 空セッションを除外（オプション）
@@ -311,7 +407,7 @@ function createApiRouter(config, adapter) {
       // 詳細版: メッセージオブジェクト全体を含む
       const detailedList = await Promise.all(
         filteredSessions.map(async (s) => {
-          const events = await store.read(s.path);
+          const events = await s.adapter.sessions.read(s.path);
           const userMessages = events.filter(e => e.message && e.message.role === 'user');
           const assistantMessages = events.filter(e => e.message && e.message.role === 'assistant');
 
@@ -333,11 +429,12 @@ function createApiRouter(config, adapter) {
           }, 0);
 
           // プロジェクト情報を抽出
-          const projectPath = adapter.resolveProject(s.path);
+          const projectPath = s.adapter.resolveProject(s.path);
           const projectName = projectPath ? path.basename(projectPath) : null;
 
           return {
             id: s.id,
+            engine: s.adapter.id,
             createdAt: events.length > 0 ? events[0].timestamp : null,
             lastModifiedAt: events.length > 0 ? events[events.length - 1].timestamp : null,
             messageCount: userMessages.length + assistantMessages.length,
@@ -466,13 +563,10 @@ function createApiRouter(config, adapter) {
     try {
       const sessionId = c.req.param('id');
       const projectPath = query(c, 'projectPath');
-      const sessionLocation = await store.locate(sessionId, projectPath);
+      const found = await findSession(c, sessionId, projectPath);
+      if (found.response) return found.response;
 
-      if (!sessionLocation) {
-        return c.json({ error: 'Session not found' }, 404);
-      }
-
-      const events = await store.read(sessionLocation);
+      const events = await found.adapter.sessions.read(found.location);
       const signals = buildSignals(events);
 
       return c.json({
@@ -492,13 +586,10 @@ function createApiRouter(config, adapter) {
     try {
       const sessionId = c.req.param('id');
       const projectPath = query(c, 'projectPath');
-      const sessionLocation = await store.locate(sessionId, projectPath);
+      const found = await findSession(c, sessionId, projectPath);
+      if (found.response) return found.response;
 
-      if (!sessionLocation) {
-        return c.json({ error: 'Session not found' }, 404);
-      }
-
-      let events = await store.read(sessionLocation);
+      let events = await found.adapter.sessions.read(found.location);
 
       if (query(c, 'textOnly') === 'true') {
         events = events.map(extractTextTurn).filter(Boolean);
@@ -524,13 +615,10 @@ function createApiRouter(config, adapter) {
     try {
       const sessionId = c.req.param('id');
       const projectPath = query(c, 'projectPath');
-      const sessionLocation = await store.locate(sessionId, projectPath);
+      const found = await findSession(c, sessionId, projectPath);
+      if (found.response) return found.response;
 
-      if (!sessionLocation) {
-        return c.json({ error: 'Session not found' }, 404);
-      }
-
-      const events = await store.read(sessionLocation);
+      const events = await found.adapter.sessions.read(found.location);
       const userMessages = events.filter(e => e.message && e.message.role === 'user');
 
       if (userMessages.length === 0) {
@@ -552,13 +640,10 @@ function createApiRouter(config, adapter) {
     try {
       const sessionId = c.req.param('id');
       const projectPath = query(c, 'projectPath');
-      const sessionLocation = await store.locate(sessionId, projectPath);
+      const found = await findSession(c, sessionId, projectPath);
+      if (found.response) return found.response;
 
-      if (!sessionLocation) {
-        return c.json({ error: 'Session not found' }, 404);
-      }
-
-      const events = await store.read(sessionLocation);
+      const events = await found.adapter.sessions.read(found.location);
       const userMessages = events.filter(e => e.message && e.message.role === 'user');
 
       if (userMessages.length === 0) {
@@ -580,13 +665,10 @@ function createApiRouter(config, adapter) {
     try {
       const sessionId = c.req.param('id');
       const projectPath = query(c, 'projectPath');
-      const sessionLocation = await store.locate(sessionId, projectPath);
+      const found = await findSession(c, sessionId, projectPath);
+      if (found.response) return found.response;
 
-      if (!sessionLocation) {
-        return c.json({ error: 'Session not found' }, 404);
-      }
-
-      const events = await store.read(sessionLocation);
+      const events = await found.adapter.sessions.read(found.location);
       const assistantMessages = events.filter(e => e.message && e.message.role === 'assistant');
 
       if (assistantMessages.length === 0) {
@@ -608,13 +690,10 @@ function createApiRouter(config, adapter) {
     try {
       const sessionId = c.req.param('id');
       const projectPath = query(c, 'projectPath');
-      const sessionLocation = await store.locate(sessionId, projectPath);
+      const found = await findSession(c, sessionId, projectPath);
+      if (found.response) return found.response;
 
-      if (!sessionLocation) {
-        return c.json({ error: 'Session not found' }, 404);
-      }
-
-      const events = await store.read(sessionLocation);
+      const events = await found.adapter.sessions.read(found.location);
       const assistantMessages = events.filter(e => e.message && e.message.role === 'assistant');
 
       if (assistantMessages.length === 0) {
@@ -656,13 +735,10 @@ function createApiRouter(config, adapter) {
     try {
       const sessionId = c.req.param('id');
       const projectPath = query(c, 'projectPath');
-      const sessionLocation = await store.locate(sessionId, projectPath);
+      const found = await findSession(c, sessionId, projectPath);
+      if (found.response) return found.response;
 
-      if (!sessionLocation) {
-        return c.json({ error: 'Session not found' }, 404);
-      }
-
-      const events = await store.read(sessionLocation);
+      const events = await found.adapter.sessions.read(found.location);
       const chatMessages = events.filter(isUserChat);
 
       if (chatMessages.length === 0) {
@@ -681,13 +757,10 @@ function createApiRouter(config, adapter) {
     try {
       const sessionId = c.req.param('id');
       const projectPath = query(c, 'projectPath');
-      const sessionLocation = await store.locate(sessionId, projectPath);
+      const found = await findSession(c, sessionId, projectPath);
+      if (found.response) return found.response;
 
-      if (!sessionLocation) {
-        return c.json({ error: 'Session not found' }, 404);
-      }
-
-      const events = await store.read(sessionLocation);
+      const events = await found.adapter.sessions.read(found.location);
       const chatMessages = events.filter(isUserChat);
 
       if (chatMessages.length === 0) {
@@ -706,13 +779,10 @@ function createApiRouter(config, adapter) {
     try {
       const sessionId = c.req.param('id');
       const projectPath = query(c, 'projectPath');
-      const sessionLocation = await store.locate(sessionId, projectPath);
+      const found = await findSession(c, sessionId, projectPath);
+      if (found.response) return found.response;
 
-      if (!sessionLocation) {
-        return c.json({ error: 'Session not found' }, 404);
-      }
-
-      const events = await store.read(sessionLocation);
+      const events = await found.adapter.sessions.read(found.location);
       const chatMessages = events.filter(isAssistantChat);
 
       if (chatMessages.length === 0) {
@@ -731,13 +801,10 @@ function createApiRouter(config, adapter) {
     try {
       const sessionId = c.req.param('id');
       const projectPath = query(c, 'projectPath');
-      const sessionLocation = await store.locate(sessionId, projectPath);
+      const found = await findSession(c, sessionId, projectPath);
+      if (found.response) return found.response;
 
-      if (!sessionLocation) {
-        return c.json({ error: 'Session not found' }, 404);
-      }
-
-      const events = await store.read(sessionLocation);
+      const events = await found.adapter.sessions.read(found.location);
       const chatMessages = events.filter(isAssistantChat);
 
       if (chatMessages.length === 0) {
@@ -754,7 +821,7 @@ function createApiRouter(config, adapter) {
   // POST /sessions/new - 新規セッション作成
   api.post('/sessions/new', async (c) => {
     try {
-      const { prompt, projectPath, cwd, allowedTools, disallowedTools, model, dangerouslySkipPermissions } = c.get('body');
+      const { prompt, projectPath, cwd, allowedTools, disallowedTools, model, dangerouslySkipPermissions, engine } = c.get('body');
 
       // 必須パラメータのチェック
       if (!prompt) {
@@ -776,13 +843,18 @@ function createApiRouter(config, adapter) {
         }, 400);
       }
 
+      // 起動するエンジンを決める
+      const start = resolveStartEngine(c, engine);
+      if (start.response) return start.response;
+
       // dangerouslySkipPermissions のデフォルト値を config から取得
       const skipPermissions = dangerouslySkipPermissions !== undefined
         ? dangerouslySkipPermissions
         : defaultDangerouslySkipPermissions;
 
       // startNewSession を呼び出し
-      const result = await startNewSession(adapter.spawn, prompt, {
+      const result = await startNewSession(start.adapter.spawn, prompt, {
+        engine: start.adapter.id,
         cwd: workingDirectory,
         allowedTools: allowedTools || [],
         disallowedTools: disallowedTools || [],
@@ -794,6 +866,7 @@ function createApiRouter(config, adapter) {
       return c.json({
         message: 'Session started',
         sessionId: result.sessionId,
+        engine: start.adapter.id,
         pid: result.pid,
         model: result.model,
         cwd: result.cwd,
@@ -861,7 +934,7 @@ function createApiRouter(config, adapter) {
   api.post('/sessions/:id/send', async (c) => {
     try {
       const sessionId = c.req.param('id');
-      const { prompt, projectPath, cwd, allowedTools, disallowedTools, model, dangerouslySkipPermissions } = c.get('body');
+      const { prompt, projectPath, cwd, allowedTools, disallowedTools, model, dangerouslySkipPermissions, engine } = c.get('body');
 
       // 必須パラメータのチェック
       if (!prompt) {
@@ -883,11 +956,9 @@ function createApiRouter(config, adapter) {
         }, 400);
       }
 
-      // セッションが存在するか確認
-      const sessionLocation = await store.locate(sessionId);
-      if (!sessionLocation) {
-        return c.json({ error: 'Session not found' }, 404);
-      }
+      // セッションが存在するか確認し、どのエンジンのセッションかを引く(engine は、ボディか ?engine= で指定できる)
+      const found = await findSession(c, sessionId, undefined, engine ?? query(c, 'engine'));
+      if (found.response) return found.response;
 
       // dangerouslySkipPermissions のデフォルト値を config から取得
       const skipPermissions = dangerouslySkipPermissions !== undefined
@@ -895,7 +966,8 @@ function createApiRouter(config, adapter) {
         : defaultDangerouslySkipPermissions;
 
       // sendToSession を呼び出し
-      const result = await sendToSession(adapter.spawn, sessionId, prompt, {
+      const result = await sendToSession(found.adapter.spawn, sessionId, prompt, {
+        engine: found.adapter.id,
         cwd: workingDirectory,
         allowedTools: allowedTools || [],
         disallowedTools: disallowedTools || [],
@@ -907,6 +979,7 @@ function createApiRouter(config, adapter) {
       return c.json({
         success: true,
         sessionId: result.sessionId,
+        engine: found.adapter.id,
         pid: result.pid,
         model: result.model,
         cwd: result.cwd,
@@ -1109,8 +1182,10 @@ function createApiRouter(config, adapter) {
     return c.json(result);
   });
 
-  // エンジン固有のルート(例: claude-code の GET /claude-version)
-  if (adapter.mountRoutes) adapter.mountRoutes(api);
+  // エンジン固有のルート(例: claude-code の GET /claude-version)。動かしている全エンジンのものを登録する
+  for (const a of engines.list()) {
+    if (a.mountRoutes) a.mountRoutes(api);
+  }
 
   return api;
 }

@@ -14,6 +14,7 @@ import { parseLine } from './parse.js';
 import { extractProjectPath, isSubagent, isAgentSession, sessionIdFromPath } from './project.js';
 import { createSessions } from './sessions.js';
 import { buildArgs, spawnProcess, parseInit } from './spawn.js';
+import { auth } from './auth.js';
 
 const defaultWatchDir = '~/.codex/sessions';
 
@@ -23,7 +24,6 @@ const defaultWatchDir = '~/.codex/sessions';
 export default function createAdapter(config) {
   return {
     id: 'codex',
-    backendType: 'codex',
     observe: { kind: 'file-tail', extension: '.jsonl' },
     defaultWatchDir,
     parse: parseLine,
@@ -32,7 +32,8 @@ export default function createAdapter(config) {
     isSubagent,
     isAgentSession,
     sessions: createSessions(config.watchDir),
-    spawn: { buildArgs, spawnProcess, parseInit }
+    spawn: { buildArgs, spawnProcess, parseInit },
+    auth
   };
 }
 

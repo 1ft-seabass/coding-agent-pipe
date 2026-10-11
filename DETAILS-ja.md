@@ -23,7 +23,7 @@ coding-agent-pipe の完全なドキュメント
 
 coding-agent-pipe は、コーディングエージェントのセッションファイル(JSONL)を監視して、Webhook で配信し、REST API(と MQTT)で、セッションの読み取り・送信・キャンセルを行う、薄い橋渡しです。
 
-- **1 プロセス = 1 エンジン**: 起動時に `config.engine` で、どのコーディングエージェントを扱うかを 1 つ選びます。今は `claude-code` と `codex` です(未指定、空文字は `claude-code`)。別のエンジンは、別のプロセスとして立てます。[Codex を使う](#codex-を使う)を参照。
+- **複数のエンジンを 1 つのサーバーで**: `engines` で、どのコーディングエージェントを動かすかを選びます。今は `claude-code` と `codex` です(`engines` を書かなければ `claude-code` だけ)。接続は 1 つで、Webhook や各 API の `engine` で出し分けます。[複数のエンジンを動かす](#複数のエンジンを動かす)と、[Codex を使う](#codex-を使う)を参照。
 - claude-code-pipe(0.9.x)の、API と Webhook の出力を引き継いでいます。claude-code-pipe に対して、次のものを**追加**しています。
   - Webhook と `GET /info` の `pipeApp`(どのアプリから来たか。常に `"coding-agent-pipe"`)と `engine`(どのエージェントか。例: `"claude-code"`)。claude-code-pipe はこの 2 つを送りません。受け手は、無ければ `pipeApp` を `claude-code-pipe`、`engine` を `claude-code` とみなせます。
 - claude-code-pipe の文書に載っていなかったルート(`GET /health`、`GET /managed`)や、項目(`GET /processes` の `alive` など)も、ここに載せています(機能は claude-code-pipe にもありました)。
@@ -39,8 +39,8 @@ coding-agent-pipe は、コーディングエージェントのセッション�
 
 ```json
 {
-  "engine": "claude-code",
-  "watchDir": "~/.claude/projects",
+  "engines": ["claude-code"],
+  "watchDirs": { "claude-code": "~/.claude/projects" },
   "port": 3100,
   "apiToken": "YOUR_TOKEN_HERE",
   "projectTitle": "",
@@ -83,8 +83,10 @@ coding-agent-pipe は、コーディングエージェントのセッション�
 
 | フィールド | 型 | 必須 | デフォルト | 説明 |
 |-------|------|----------|---------|-------------|
-| `engine` | string | No | `"claude-code"` | 扱うコーディングエージェント(`claude-code`、`codex`)。未指定・空文字は `claude-code`。未知の値は、起動時にエラー終了 |
-| `watchDir` | string | Yes(`engine` が `codex` なら No) | - | セッションファイルの監視ディレクトリ(例: `~/.claude/projects`)。`codex` で省略すると `~/.codex/sessions`。`~` は展開される。**存在しない場合は、作らない**: 警告を 1 回出して、起動は続け、ディレクトリが現れたら監視を始める(5 秒おきに確認する) |
+| `engines` | array | No | `["claude-code"]` | 動かすコーディングエージェントの配列(`claude-code`、`codex`)。書かなければ `claude-code` だけ。未知の名前は、起動時にエラー終了。[複数のエンジンを動かす](#複数のエンジンを動かす)を参照 |
+| `watchDirs` | object | No | エンジンの既定の場所 | エンジンごとの、セッションファイルの監視ディレクトリ(例: `{ "codex": "/path" }`)。省略したエンジンは、既定の場所(`claude-code` は `~/.claude/projects`、`codex` は `~/.codex/sessions`)。`~` は展開される。**存在しない場合は、作らない**: 警告を 1 回出して、起動は続け、ディレクトリが現れたら監視を始める(5 秒おきに確認する)。動かしていないエンジンのキーは、起動時にエラー |
+| `engine` | string | No | `"claude-code"` | **旧来の指定**: 扱うエンジンを 1 つだけ指定する(`claude-code`、`codex`)。未指定・空文字は `claude-code`。`engines` とは一緒に書けない(起動時にエラー) |
+| `watchDir` | string | No | エンジンの既定の場所 | **旧来の指定**: `engine`(または既定の `claude-code`)の、監視ディレクトリ。`engines` とは一緒に書けない(起動時にエラー。`engines` では `watchDirs` を使う) |
 | `port` | number | No | `3100` | サーバーのポート番号 |
 | `apiToken` | string | No | `""` | API 認証トークン。設定すると、全リクエストに `Authorization: Bearer TOKEN` ヘッダーが必要 |
 | `projectTitle` | string | No | `null` | ユーザー定義のプロジェクトタイトル(Webhook ペイロードと `GET /info` に含まれる) |
@@ -211,17 +213,47 @@ Webhook を受信する側が、coding-agent-pipe に送信 API でメッセー�
 
 > **ポートについて**: claude-code-pipe を同じマシンで動かしている場合は、ポートを分けてください(claude-code-pipe の既定は 3100)。
 
-### Codex を使う
+### 複数のエンジンを動かす
 
-`engine` を `codex` にすると、Claude Code の代わりに、OpenAI の Codex CLI を扱います。API と Webhook の形は、`claude-code` と同じです。
-
-**前提**: `codex` コマンドが `PATH` にあり、ログイン済みであること(ChatGPT のアカウント、または API キー)。ログインは、このサーバーの外(`codex login`)で行います。
-
-**設定例**(`watchDir` は省略できます。省略すると `~/.codex/sessions` を見ます):
+1 つのサーバーで、複数のエンジンを動かせます。`engines` に、動かすエンジンを書きます。接続(ポートと `callbackUrl`)は 1 つのままで、受け手は、Webhook の `engine`(`claude-code`、`codex`)で出し分けます。
 
 ```json
 {
-  "engine": "codex",
+  "engines": ["claude-code", "codex"],
+  "watchDirs": {
+    "claude-code": "~/.claude/projects",
+    "codex": "~/.codex/sessions"
+  },
+  "port": 3100,
+  "subscribers": [
+    { "url": "http://localhost:1880/webhook", "label": "node-red" }
+  ]
+}
+```
+
+**設定の規則**:
+- `engines` を書かなければ、**`claude-code` だけ**を動かします(これまでの設定が、そのまま動きます)。
+- `watchDirs` は、エンジンごとのセッションの置き場です。省略すると、エンジンの既定の場所(`claude-code` は `~/.claude/projects`、`codex` は `~/.codex/sessions`)です。動かしていないエンジンのキーや、空の値は、起動時のエラーです(綴りの間違いに気づけます)。
+- 旧来の `engine`(1 つだけ)と `watchDir` も、そのまま動きます。ただし、`engines` とは**一緒に書けません**(`engine` と `engines`、`watchDir` と `engines` の組み合わせは、起動時のエラーです。どちらの意味か曖昧なため)。`engines` では、`watchDirs` を使います。
+- 未知のエンジン名は、起動時にエラー終了します(使えるエンジンの一覧つき)。
+
+**既定のエンジン**: `claude-code` を動かしていれば `claude-code`、そうでなければ先頭のエンジンです。`GET /info` の `engine`・`watchDir`(既存の項目)は、既定のエンジンの値です。
+
+**新規起動で `engine` を省略したとき**(`POST /sessions/new`、MQTT): `claude-code` を動かしていれば `claude-code` です。動かしていなくて、動かしているエンジンが 1 つだけなら、そのエンジンです。2 つ以上なら、`engine` の指定が要ります(`400`)。
+
+**取得系のルート**: エンジンごとに分かれるのは、セッションを読む・起動する・管理する系だけです。コンテナの情報(`GET /health`、`GET /info` など)と、リポジトリの情報(`GET /git/status` など)は、1 つのままです。`GET /sessions`・`GET /projects` は、動かしている全エンジンのセッションをまとめて返し、各要素に `engine` が付きます(`?engine=` で絞れます)。エンジンの一覧は `GET /engine`、ログイン状態は `GET /engine/:id/auth` です。
+
+### Codex を使う
+
+`engines` に `codex` を書く(または、旧来の `engine` を `codex` にする)と、OpenAI の Codex CLI を扱います。API と Webhook の形は、`claude-code` と同じです。`claude-code` と一緒に動かすこともできます([複数のエンジンを動かす](#複数のエンジンを動かす))。
+
+**前提**: `codex` コマンドが `PATH` にあり、ログイン済みであること(ChatGPT のアカウント、または API キー)。ログインは、このサーバーの外(`codex login`)で行います。
+
+**設定例**(Codex だけを動かす場合。`watchDirs` は省略できます。省略すると `~/.codex/sessions` を見ます。旧来の `"engine": "codex"` でも、同じ動きです):
+
+```json
+{
+  "engines": ["codex"],
   "port": 3101,
   "projectTitle": "my-project",
   "callbackUrl": "http://localhost:3101",
@@ -249,7 +281,7 @@ Webhook を受信する側が、coding-agent-pipe に送信 API でメッセー�
 | `cancel` | SIGINT で止まります(確認した範囲では、数百ミリ秒。終了コードは `1`)。中断したセッションは、続けて再開できます |
 | MQTT・Windows | 動作を確かめていません |
 
-> `claude-code` と `codex` は、別のプロセスとして立てます(1 プロセス = 1 エンジン)。同じマシンで両方を動かすときは、ポートを分けてください。
+> `claude-code` と `codex` は、1 つのサーバーで一緒に動かせます(`engines: ["claude-code", "codex"]`)。別のサーバーとして立てる場合は、ポートを分けてください。
 
 ---
 
@@ -279,6 +311,8 @@ curl -H "Authorization: Bearer YOUR_TOKEN_HERE" \
 ### 共通のクエリ
 
 - `projectPath`(多くの読み取り系): 同じセッション ID が複数のプロジェクトにある場合の絞り込み。
+- `engine`(セッションを読む系: `GET /projects`、`GET /sessions`、`/sessions/:id/...` の読み取り): 対象のエンジンを絞ります(例: `?engine=codex`)。指定しなければ、動かしている全エンジンが対象です。動かしていないエンジンや未知の名前は、`400` で `{ "error": "Unknown engine", "engine": "...", "available": ["claude-code", "codex"] }` を返します(`available` は、動かしているエンジン)。
+- 同じセッション ID が、複数のエンジンで見つかったときは、`409` で `{ "error": "Session found in multiple engines", "sessionId": "...", "engines": ["claude-code", "codex"] }` を返します。`?engine=` で、どちらかを指定してください。
 - 値の `true` / `false` は、文字列として比較します(`?excludeEmpty=false`)。
 
 ### Info(情報)
@@ -298,7 +332,7 @@ curl http://localhost:3100/health
 ```json
 {
   "status": "ok",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "uptime": 123.456
 }
 ```
@@ -326,7 +360,7 @@ curl http://localhost:3100/version
 ```json
 {
   "name": "coding-agent-pipe",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "A pipe for coding agent CLI input/output using JSONL and Hono"
 }
 ```
@@ -351,17 +385,19 @@ curl http://localhost:3100/info
 
 ```json
 {
-  "version": "0.2.0",
+  "version": "0.3.0",
   "os": "linux",
   "communicationMode": "bidirectional",
-  "backendType": "claude_code",
   "pipeApp": "coding-agent-pipe",
   "engine": "claude-code",
   "callbackUrl": "http://localhost:3100",
   "mqttCommandTopic": "claude/pipe-A/send",
   "subscriberCount": 2,
   "projectTitle": "My Project",
-  "watchDir": "~/.claude/projects"
+  "watchDir": "~/.claude/projects",
+  "engines": [
+    { "id": "claude-code", "watchDir": "~/.claude/projects", "default": true }
+  ]
 }
 ```
 
@@ -370,14 +406,76 @@ curl http://localhost:3100/info
 | `version` | string | 現在のバージョン |
 | `os` | string | `"linux"`、`"mac"`、`"windows"` のいずれか(WSL は `"linux"`) |
 | `communicationMode` | string | `"watch-only"`(subscriber なし)、`"webhook-only"`(subscriber はあるが `callbackUrl` も `mqtt.commandTopic` もない)、`"bidirectional"`(subscriber があり、`callbackUrl` または `mqtt.commandTopic` もある) |
-| `backendType` | string | 旧来の互換項目(`claude_code`。`codex` のときは `codex`)。どのエージェントかは `engine` を見る |
 | `pipeApp` | string | 常に `"coding-agent-pipe"`(claude-code-pipe は送らない) |
 | `engine` | string | どのコーディングエージェントか(`"claude-code"`、`"codex"`。claude-code-pipe は送らない) |
 | `callbackUrl` | string\|null | `config.callbackUrl`。未設定は `null` |
 | `mqttCommandTopic` | string\|null | `config.mqtt.commandTopic`。MQTT 未設定は `null`。broker の URL・認証情報は含まれない |
 | `subscriberCount` | number | 設定済み `subscribers` の件数 |
 | `projectTitle` | string\|null | `config.projectTitle`。未設定は `null` |
-| `watchDir` | string | `config.watchDir` |
+| `watchDir` | string | 既定のエンジンの置き場 |
+| `engines` | object[] | 動かしているエンジンの一覧(`id`、`watchDir`、既定かどうか)。claude-code-pipe には無い項目 |
+
+`engine`・`watchDir` は、**既定のエンジン**の値です(既定のエンジンは、`claude-code` が動いていれば `claude-code`、そうでなければ先頭のエンジン)。エンジンごとの状態は `engines` で見られます。
+
+#### `GET /engine`
+
+動かしているエンジンの一覧を返します。`GET /info` の `engines` と同じ内容です(CLI を呼ばないので、軽い取得です)。
+
+**リクエスト:**
+
+```bash
+curl http://localhost:3100/engine
+```
+
+**レスポンス:**
+
+```json
+{
+  "engines": [
+    { "id": "claude-code", "watchDir": "~/.claude/projects", "default": true },
+    { "id": "codex", "watchDir": "~/.codex/sessions", "default": false }
+  ]
+}
+```
+
+| フィールド | 型 | 説明 |
+|-------|------|-------------|
+| `id` | string | エンジンの識別子(`"claude-code"`、`"codex"`) |
+| `watchDir` | string | そのエンジンのセッションの置き場 |
+| `default` | boolean | 既定のエンジンか |
+
+#### `GET /engine/:id/auth`
+
+エンジンの**ログイン状態**を返します。そのエンジンの CLI(`claude auth status`、`codex login status`)を実行して調べるので、`GET /engine` や `GET /info` より重い取得です。
+
+**リクエスト:**
+
+```bash
+curl http://localhost:3100/engine/codex/auth
+```
+
+**レスポンス(`200`):**
+
+```json
+{
+  "engine": "codex",
+  "loggedIn": true,
+  "method": "chatgpt"
+}
+```
+
+| フィールド | 型 | 説明 |
+|-------|------|-------------|
+| `engine` | string | エンジンの識別子 |
+| `loggedIn` | boolean | ログインしているか |
+| `method` | string\|null | ログインの方法。`claude-code` は CLI が報告する値(例: `claude.ai`)。`codex` は `chatgpt` か `api-key`。ログインしていない・読み取れないときは `null` |
+| `error` | string | CLI を実行できなかった、または出力を解釈できなかったときだけ付く。`command not found`(CLI が無い)、`timed out`(10 秒で終わらない)、`failed to run`、`unexpected output` のいずれか。このとき `loggedIn` は `false` |
+
+- **メールアドレス、組織 ID、組織名などは返しません。** CLI の出力のうち、返すのは `loggedIn` と `method` だけです(出力そのものは、レスポンスにも、ログにも出しません)。
+- **結果は 30 秒間覚えます**(エンジンごと)。短い間に何度呼んでも、CLI は 1 回だけ実行されます。ログイン状態が変わっても、反映は最大 30 秒後です。
+- CLI が使えなくても、`200` で `loggedIn: false` と `error` を返します(状態として、1 つの形で受け取れます)。
+- 動かしていない、または未知のエンジンは、`404` `{ "error": "Unknown engine", "engine": "...", "available": [...] }` です。
+- `codex` の `method` は、CLI の出力の文から読み取ります。CLI の更新で文言が変わると、`method` が `null` になることがあります(`loggedIn` は終了コードで決めるので影響しません)。
 
 #### `GET /claude-version`
 
@@ -419,6 +517,7 @@ curl http://localhost:3100/claude-version
 |-------|------|-------------|
 | `excludeAgents` | `true` | `agent-*` のセッション(サブエージェント)を除く。`false` で含める |
 | `excludeEmpty` | `true` | メッセージが 0 件のセッションを除く。`false` で含める |
+| `engine` | (全エンジン) | 対象のエンジンを絞る(例: `codex`) |
 
 **リクエスト:**
 
@@ -436,14 +535,14 @@ curl http://localhost:3100/projects
       "projectName": "my-app",
       "sessionCount": 1,
       "sessions": [
-        { "id": "11111111-1111-4111-8111-111111111111", "mtime": 1788220800000 }
+        { "id": "11111111-1111-4111-8111-111111111111", "mtime": 1788220800000, "engine": "claude-code" }
       ]
     }
   ]
 }
 ```
 
-`mtime` は、セッションファイルの更新時刻(ミリ秒のエポック)です。
+`mtime` は、セッションファイルの更新時刻(ミリ秒のエポック)です。`engine` は、そのセッションのエンジンです(claude-code-pipe には無い項目)。動かしている全エンジンのセッションが、`projectPath` ごとに 1 つにまとまります(同じディレクトリで Claude Code と Codex を使えば、1 つのプロジェクトの下に両方が並びます)。
 
 #### `GET /sessions`
 
@@ -456,6 +555,7 @@ curl http://localhost:3100/projects
 | `detail` | `false` | `true` で、最初と最後のメッセージを、オブジェクト(`content`・`timestamp`・`usage`)で返す |
 | `excludeAgents` | `true` | `agent-*` のセッションを除く |
 | `excludeEmpty` | `true` | メッセージが 0 件のセッションを除く |
+| `engine` | (全エンジン) | 対象のエンジンを絞る(例: `codex`) |
 
 **リクエスト:**
 
@@ -471,6 +571,7 @@ curl "http://localhost:3100/sessions?detail=true&excludeEmpty=false"
   "sessions": [
     {
       "id": "11111111-1111-4111-8111-111111111111",
+      "engine": "claude-code",
       "createdAt": "2026-09-01T00:00:00.000Z",
       "lastModifiedAt": "2026-09-01T00:33:21.000Z",
       "messageCount": 11,
@@ -488,6 +589,7 @@ curl "http://localhost:3100/sessions?detail=true&excludeEmpty=false"
 }
 ```
 
+- `engine` は、そのセッションのエンジンです(claude-code-pipe には無い項目)。動かしている全エンジンのセッションが、1 つの一覧に並びます(エンジンの登録順。並べ替えはしません)。
 - `firstUserMessage` などは、`text` ブロックを連結した文字列です。該当するメッセージがなければ `null`。
 - `totalTokens` は、アシスタントの `input_tokens` と `output_tokens` の合計です。
 - `detail=true` のとき、`firstUserMessage` などは `{ "content": "...", "timestamp": "..." }`(アシスタントは `usage` も)のオブジェクトになります。
@@ -496,7 +598,7 @@ curl "http://localhost:3100/sessions?detail=true&excludeEmpty=false"
 
 メッセージ本文を含まない、「シグナル」の配列を返します(種別・時刻・所要時間・本文のバイト数)。サブエージェントは別ファイル・別のセッション ID なので、含まれません。
 
-**クエリパラメータ:** `projectPath`(任意。同じ ID が複数のプロジェクトにあるとき)
+**クエリパラメータ:** `projectPath`(任意。同じ ID が複数のプロジェクトにあるとき)、`engine`(任意。同じ ID が複数のエンジンにあるとき)
 
 **リクエスト:**
 
@@ -647,6 +749,7 @@ curl http://localhost:3100/sessions/SESSION_ID/messages/assistant/latest
 | `disallowedTools` | array | No | 禁止するツール |
 | `model` | string | No | 使用するモデル |
 | `dangerouslySkipPermissions` | boolean | No | 権限確認をスキップする。省略すると `send.defaultDangerouslySkipPermissions`。**⚠️ 危険です**。[セキュリティに関する注意事項](#セキュリティに関する注意事項)を参照 |
+| `engine` | string | No | 起動するエンジン(`"claude-code"`、`"codex"`)。省略すると `claude-code`(これまでの呼び出しが、そのまま動く)。`claude-code` を動かしていなくて、動かしているエンジンが 1 つだけのときは、そのエンジン。動かしていないエンジンや未知の名前は `400` |
 
 **リクエスト:**
 
@@ -662,6 +765,7 @@ curl -X POST http://localhost:3100/sessions/new \
 {
   "message": "Session started",
   "sessionId": "55555555-5555-4555-8555-555555555555",
+  "engine": "claude-code",
   "pid": 12345,
   "model": "claude-opus-5-5",
   "cwd": "/home/user/projects/my-app",
@@ -673,7 +777,7 @@ curl -X POST http://localhost:3100/sessions/new \
 }
 ```
 
-`codingAgentVersion` は、エンジンに依らない名前のバージョンです(`claude-code` では `claudeCodeVersion` と同じ値、`codex` では `null`)。`claudeCodeVersion` は `claude-code` のときだけ返ります。
+`codingAgentVersion` は、エンジンに依らない名前のバージョンです(`claude-code` では `claudeCodeVersion` と同じ値、`codex` では `null`)。`claudeCodeVersion` は `claude-code` のときだけ返ります。`engine` は、起動したエンジンです(claude-code-pipe には無い項目)。
 
 起動と同時に、Webhook の `session-started` が配信されます(のちに `user-message-received`、`assistant-response-completed`、終了時に `process-exit`)。
 
@@ -684,6 +788,8 @@ curl -X POST http://localhost:3100/sessions/new \
 | `400` | `{ "error": "prompt is required" }` | `prompt` がない・空 |
 | `400` | `{ "error": "projectPath is required", "message": "..." }` | `projectPath`(と `cwd`)がない |
 | `400` | `{ "error": "projectPath does not exist", "message": "..." }` | そのディレクトリが存在しない |
+| `400` | `{ "error": "Unknown engine", "engine": "...", "available": ["claude-code", "codex"] }` | `engine` が、動かしていない、または未知(`available` は、動かしているエンジン) |
+| `400` | `{ "error": "engine is required", "message": "...", "available": [...] }` | `engine` を省略したが、既定のエンジンを決められない(`claude-code` を動かしておらず、動かしているエンジンが 2 つ以上) |
 | `500` | `{ "error": "Failed to start new session" }` | 起動に失敗した(理由は、ログにだけ出る。下の注意を参照) |
 
 > **注意: `500` の理由は返りません。** 次のような場合に起きます(いずれも、claude-code-pipe から引き継いだ既知の挙動です。[エラーと制限](#エラーと制限)を参照)。
@@ -695,7 +801,7 @@ curl -X POST http://localhost:3100/sessions/new \
 
 既存のセッションに、メッセージを送ります(エージェントの `--resume` で、新しいプロセスを起動します)。
 
-**リクエストボディ:** `POST /sessions/new` と同じです(`prompt` と `projectPath`(または `cwd`)が必須)。
+**リクエストボディ:** `POST /sessions/new` と同じです(`prompt` と `projectPath`(または `cwd`)が必須)。`engine` は、**セッション ID から引く**ので、通常は不要です。同じ ID が複数のエンジンにあるときは、`engine`(ボディ、または `?engine=`)で選びます。
 
 **リクエスト:**
 
@@ -712,6 +818,7 @@ curl -X POST http://localhost:3100/sessions/SESSION_ID/send \
   "success": true,
   "message": "Message sent successfully",
   "sessionId": "11111111-1111-4111-8111-111111111111",
+  "engine": "claude-code",
   "pid": 12346,
   "model": "claude-opus-5-5",
   "cwd": "/home/user/projects/my-app",
@@ -722,7 +829,7 @@ curl -X POST http://localhost:3100/sessions/SESSION_ID/send \
 }
 ```
 
-**エラー:** `400`(`prompt is required` / `projectPath is required` / `projectPath does not exist`。`POST /sessions/new` と同じ)、`404` `{ "error": "Session not found" }`(そのセッションが見つからない)、`500` `{ "error": "Failed to send message" }`。
+**エラー:** `400`(`prompt is required` / `projectPath is required` / `projectPath does not exist`。`POST /sessions/new` と同じ)、`404` `{ "error": "Session not found" }`(そのセッションが見つからない)、`409` `{ "error": "Session found in multiple engines", "sessionId": "...", "engines": [...] }`(同じ ID が複数のエンジンにある。`engine` で選ぶ)、`400` `{ "error": "Unknown engine", ... }`(`engine` が未知)、`500` `{ "error": "Failed to send message" }`。送ったエンジンは、レスポンスの `engine` で分かります。
 
 > **同じセッションに、続けて 2 回送ると**、最初のプロセスが管理から外れて、`DELETE /processes` や `cancel` で止められなくなります(既知の挙動。[エラーと制限](#エラーと制限)を参照)。
 
@@ -769,9 +876,11 @@ REST の送信 API の代わりに、MQTT で、セッションを動かせま�
 | `projectPath` | string | No | **新規**セッションの作業ディレクトリ。`sessionId` がある場合は無視される。**省略すると、サーバーの起動ディレクトリで動く**(REST の `projectPath` 必須とは違う) |
 | `sessionId` | string | No | 指定すると、既存セッションに送る(`--resume`)。省略すると、新規セッション |
 | `model` | string | No | 使用するモデル |
+| `engine` | string | No | 新規セッションを起動するエンジン。省略すると `claude-code`(動かしていなくて、動かしているエンジンが 1 つだけならそれ)。`sessionId` がある場合は、セッション ID から引くので通常は不要で、同じ ID が複数のエンジンにあるときに選ぶ |
 
 - 許可ツールは、`config.send.defaultAllowedTools` を使います(REST の送信 API は、これを使いません)。
 - QoS は 0(送りっぱなし)で、publish した側への確認はありません。broker との接続が切れている間に publish されたコマンドは、黙って失われます。
+- **エンジンを決められないコマンドも、黙って捨てられます**: 未知(動かしていない)の `engine`、既定を決められない新規セッション、同じ ID が複数のエンジンにある再開は、何も起動せず、エラーをログに出します(MQTT には、応答を返す先がありません)。`sessionId` がどのエンジンにも無いときは、これまでどおり、既定のエンジンで再開を試みます。
 - **壊れたコマンドは、黙って捨てられます**: `prompt` がない・空、JSON でないものは、何も起動せず、Webhook も出ません。エラーは、サーバーのログにだけ出ます(`[mqtt] Command missing required field: prompt`、`[mqtt] Invalid JSON payload: ...`)。
 - broker が落ちても、サーバーは動き続けます(`/health` は返る)。broker が戻ると、再接続して、購読し直します。起動時に broker がいなくても、起動して、あとから接続します。認証が通らない場合も、サーバーは動き続けます(ログに `Connection error: Connection refused: Bad username or password`)。
 - `mqtt.password` は、一切露出しません。Webhook ペイロードの `mqttCommandTopic` と `GET /info` に含まれるのは `commandTopic` だけです。
@@ -829,7 +938,8 @@ curl http://localhost:3100/processes
       "sessionId": "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
       "pid": 12345,
       "startedAt": "2026-09-01T00:00:00.000Z",
-      "alive": true
+      "alive": true,
+      "engine": "claude-code"
     }
   ]
 }
@@ -841,6 +951,7 @@ curl http://localhost:3100/processes
 | `pid` | number | プロセス ID |
 | `startedAt` | string | 起動した時刻(ISO 8601) |
 | `alive` | boolean | プロセスが生きているか |
+| `engine` | string | そのプロセスのエンジン(claude-code-pipe には無い項目) |
 
 管理中のプロセスがなければ、`{ "processes": [] }` です。
 
@@ -862,7 +973,8 @@ curl http://localhost:3100/managed
     "sessionId": "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
     "pid": 12345,
     "startedAt": "2026-09-01T00:00:00.000Z",
-    "alive": true
+    "alive": true,
+    "engine": "claude-code"
   }
 ]
 ```
@@ -1145,7 +1257,6 @@ Webhook は、次の構造の JSON を、`POST`(`Content-Type: application/json`
 | `callbackUrl` | string\|null | `config.callbackUrl`(未設定は `null`)。受け手が、この pipe に戻るときの URL |
 | `os` | string | `"mac"`、`"linux"`、`"windows"`(WSL は `"linux"`) |
 | `communicationMode` | string | `"watch-only"`、`"webhook-only"`、`"bidirectional"`([`GET /info`](#get-info)を参照) |
-| `backendType` | string | 旧来の互換項目(`claude_code`。`codex` のときは `codex`) |
 | `pipeApp` | string | 常に `"coding-agent-pipe"`。claude-code-pipe は送らない(無ければ `claude-code-pipe` とみなせる) |
 | `engine` | string | どのコーディングエージェントか(`"claude-code"`、`"codex"`)。claude-code-pipe は送らない(無ければ `claude-code` とみなせる) |
 | `mqttCommandTopic` | string | `config.mqtt.commandTopic`(設定した場合のみ) |
@@ -1170,6 +1281,8 @@ Webhook は、次の構造の JSON を、`POST`(`Content-Type: application/json`
 | `responseTime` | number\|null | 直前のメッセージからの経過秒 |
 
 #### プロセス系(`session-started`、`session-error`、`session-timeout`、`cancel-initiated`、`process-exit`)
+
+共通の `engine` は、そのプロセスのセッションのエンジンの値です(複数のエンジンを動かしているときも、起動したエンジンが載ります)。
 
 | フィールド | 型 | 説明 |
 |-------|------|-------------|
@@ -1202,7 +1315,7 @@ Webhook は、次の構造の JSON を、`POST`(`Content-Type: application/json`
 ```json
 {
   "type": "user-message-received",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "sessionId": "11111111-1111-4111-8111-111111111111",
   "timestamp": "2026-09-01T00:33:20.000Z",
   "cwdPath": "/home/user/workspace/repos/coding-agent-pipe",
@@ -1210,7 +1323,6 @@ Webhook は、次の構造の JSON を、`POST`(`Content-Type: application/json`
   "callbackUrl": "http://localhost:3100",
   "os": "linux",
   "communicationMode": "bidirectional",
-  "backendType": "claude_code",
   "pipeApp": "coding-agent-pipe",
   "engine": "claude-code",
   "projectPath": "/home/user/projects/my-app",
@@ -1229,7 +1341,7 @@ Webhook は、次の構造の JSON を、`POST`(`Content-Type: application/json`
 ```json
 {
   "type": "assistant-response-completed",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "sessionId": "11111111-1111-4111-8111-111111111111",
   "timestamp": "2026-09-01T00:33:21.000Z",
   "cwdPath": "/home/user/workspace/repos/coding-agent-pipe",
@@ -1237,7 +1349,6 @@ Webhook は、次の構造の JSON を、`POST`(`Content-Type: application/json`
   "callbackUrl": "http://localhost:3100",
   "os": "linux",
   "communicationMode": "bidirectional",
-  "backendType": "claude_code",
   "pipeApp": "coding-agent-pipe",
   "engine": "claude-code",
   "projectPath": "/home/user/projects/my-app",
@@ -1265,7 +1376,7 @@ Webhook は、次の構造の JSON を、`POST`(`Content-Type: application/json`
 ```json
 {
   "type": "session-started",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "sessionId": "55555555-5555-4555-8555-555555555555",
   "timestamp": "2026-09-01T00:00:00.000Z",
   "cwdPath": "/home/user/workspace/repos/coding-agent-pipe",
@@ -1273,7 +1384,6 @@ Webhook は、次の構造の JSON を、`POST`(`Content-Type: application/json`
   "callbackUrl": "http://localhost:3100",
   "os": "linux",
   "communicationMode": "bidirectional",
-  "backendType": "claude_code",
   "pipeApp": "coding-agent-pipe",
   "engine": "claude-code",
   "projectPath": "/home/user/projects/my-app",
@@ -1288,7 +1398,7 @@ Webhook は、次の構造の JSON を、`POST`(`Content-Type: application/json`
 ```json
 {
   "type": "process-exit",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "sessionId": "55555555-5555-4555-8555-555555555555",
   "timestamp": "2026-09-01T00:00:05.000Z",
   "cwdPath": "/home/user/workspace/repos/coding-agent-pipe",
@@ -1296,7 +1406,6 @@ Webhook は、次の構造の JSON を、`POST`(`Content-Type: application/json`
   "callbackUrl": "http://localhost:3100",
   "os": "linux",
   "communicationMode": "bidirectional",
-  "backendType": "claude_code",
   "pipeApp": "coding-agent-pipe",
   "engine": "claude-code",
   "projectPath": "/home/user/projects/my-app",
@@ -1350,6 +1459,7 @@ Webhook は、次の構造の JSON を、`POST`(`Content-Type: application/json`
 - 自動の `OPTIONS` への応答は、ありません(CORS が要る場合は、リバースプロキシなどで)。
 - ルーティングは、大文字小文字を区別します(`/Health` は 404)。末尾のスラッシュ(`/health/`)は、区別しません。
 - 添付の保存先は `/tmp/coding-agent-pipe/` です(claude-code-pipe は `/tmp/claude-code-pipe/`)。
+- **`backendType` は送りません。** claude-code-pipe は、Webhook のすべてのペイロードと `GET /info` に `backendType`(`claude_code`)を載せていましたが、coding-agent-pipe は、同じ意味の `engine`(`claude-code`、`codex`)に一本化しました。値の書き方も違います(`claude_code` と `claude-code`)。受け手は `engine` を読んでください。`engine` が無ければ `claude-code` とみなせます。
 
 ### 既知の挙動(claude-code-pipe から引き継いでいるもの)
 
@@ -1395,7 +1505,13 @@ cp config.example.json config.json
 
 **症状:** `[index] Unknown engine: "..."`
 
-**解決策:** `config.engine` に、未対応の値が入っています。今使えるのは `claude-code` と `codex` です(未指定は `claude-code`)。
+**解決策:** `config.engines`(または旧来の `config.engine`)に、未対応の値が入っています。今使えるのは `claude-code` と `codex` です(`engines` を書かなければ `claude-code` だけ)。`engines` は `engine`・`watchDir` と一緒に書けません。
+
+---
+
+**症状:** `[index] config.watchDir cannot be used together with config.engines`(または `config.engine cannot be used together with config.engines`、`config.watchDirs has "..."`)
+
+**解決策:** `engines` は、旧来の `engine`・`watchDir` と一緒に書けません(どちらの意味か曖昧なため)。`engines` を使うときは、置き場を `watchDirs`(エンジンごと)で指定します。`watchDirs` に書けるのは、`engines` に入れたエンジンだけです。
 
 ---
 
@@ -1504,6 +1620,8 @@ coding-agent-pipe/
 │   ├── package-info.js           パッケージ情報と、pipeApp の値
 │   ├── core/                     エンジンに依存しない部分
 │   │   ├── api.js                REST のルート(読み取り・送信・管理・ファイル・git)
+│   │   ├── engines.js            エンジンの登録簿(動かしている adapter を束ねる)
+│   │   ├── auth.js               エンジンのログイン状態の確認(GET /engine/:id/auth)
 │   │   ├── process.js            起動したプロセスの管理
 │   │   ├── canceller.js          キャンセル
 │   │   ├── deliver.js            Webhook の配信
@@ -1513,8 +1631,9 @@ coding-agent-pipe/
 │   │   ├── platform.js           OS の判定
 │   │   └── sources/              観測元(セッションファイルの追記を読む)
 │   └── adapters/                 エンジンごとの部分
-│       ├── index.js              config.engine で adapter を 1 つ選ぶ
-│       └── claude-code/          Claude Code の adapter
+│       ├── index.js              設定(engines)に従って、動かす adapter を読み込む
+│       ├── claude-code/          Claude Code の adapter
+│       └── codex/                Codex の adapter
 ├── schema/event.schema.json      Webhook と GET /info の契約
 └── config.example.json
 ```
@@ -1525,11 +1644,13 @@ coding-agent-pipe/
 
 | 項目 | 役割 |
 |-------|-------------|
-| `id`、`backendType` | エンジンの識別子と、旧来の互換項目 |
+| `id` | エンジンの識別子 |
 | `observe`、`parse(line)` | 観測の方法と、1 行の解釈 |
 | `resolveProject`、`isSubagent`、`isAgentSession`、`sessionIdFromPath` | セッションの出どころから、プロジェクトなどを割り出す |
 | `sessions` | `{ list, locate, read }`。REST の読み取りが使う、セッションデータへの入口 |
 | `spawn` | `{ buildArgs, spawnProcess, parseInit }`。プロセスの起動 |
+| `auth` | `{ command, args, parse }`。ログイン状態の確認(`GET /engine/:id/auth`) |
+| `defaultWatchDir` | 置き場(`watchDirs`)が設定に無いときの既定の場所(モジュールの `defaultWatchDir` も同じ値) |
 | `mountRoutes(api)` | エンジン固有の REST ルート(任意。`claude-code` は `GET /claude-version`) |
 
 新しいエンジンを足すときは、`src/adapters/<engine>/index.js` を作り、この面を満たします。

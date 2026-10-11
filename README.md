@@ -10,7 +10,7 @@ A bidirectional pipe for coding agent CLIs (short name: `ca-pipe`).
 
 It watches the agent's JSONL session files, provides REST APIs for interaction, and distributes session events via webhooks. You can send prompts to the agent programmatically and receive events when responses are ready.
 
-- One process = one engine (selected by `config.engine`). The engines available today are `claude-code` and `codex` (OpenAI's Codex CLI; see [DETAILS: Using Codex](./DETAILS.md#using-codex))
+- One server can run several engines (selected by `engines`; if not written, only `claude-code`). The engines available today are `claude-code` and `codex` (OpenAI's Codex CLI). The connection is one, and Webhooks and the APIs tell the engines apart by `engine`. See [DETAILS: Running multiple engines](./DETAILS.md#running-multiple-engines) and [Using Codex](./DETAILS.md#using-codex)
 
 ## What This Does (and Doesn't Do)
 
@@ -89,7 +89,7 @@ You should see:
 ```
 [index] Logging to: /path/to/coding-agent-pipe/logs/server.log
 [subscribers] No subscribers configured
-coding-agent-pipe v0.2.0 listening on port 3100
+coding-agent-pipe v0.3.0 listening on port 3100
 [watcher] Starting to watch: /home/user/.claude/projects
 [watcher] Watching started
 ```

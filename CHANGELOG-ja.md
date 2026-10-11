@@ -6,6 +6,29 @@
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-11
+
+> **受け手に影響する変更:** `backendType` は送らなくなりました。`engine` を読んでください(Removed を参照)。この変更は 0.3.0 に含まれます。
+
+### Added
+- **1 つのサーバーで、複数のエンジンを動かせる。** `engines` で動かすコーディングエージェント(`claude-code`、`codex`)を選び、`watchDirs` でエンジンごとのセッションの置き場を指定する。接続(ポートと `callbackUrl`)は 1 つのままで、受け手は `engine` で出し分ける。`engines` を書かなければ `claude-code` だけを動かすので、これまでの設定は、そのまま動く。旧来の `engine`(1 つだけ)と `watchDir` も動くが、`engines` とは一緒に書けない(どちらの意味か曖昧なため、起動時にエラー)。DETAILS の「複数のエンジンを動かす」を参照
+- `GET /engine`(動かしているエンジンの一覧)と、`GET /info` の `engines`(追加のみ。既存の項目は、既定のエンジンの値)
+- `GET /engine/:id/auth`: エンジンがログインしているか(`loggedIn`)と、その方法(`method`)。`claude auth status` と `codex login status` から取る。メールアドレスや組織 ID などは返さない。結果は 30 秒覚える。CLI が使えなくても `200` で `loggedIn: false` と `error` を返す。動かしていないエンジンは `404`
+- `GET /sessions` と `GET /projects` の各セッションに `engine`。どちらも、動かしている全エンジンのセッションをまとめて返す(プロジェクトは、ディレクトリでまとまる)。`?engine=` で 1 つのエンジンに絞れる(動かしていないエンジンは `400`)。セッション ID で引くルート(`/sessions/:id/...`)は、セッション ID からエンジンを引く。同じ ID が複数のエンジンにあれば `409`(`?engine=` で選ぶ)
+- セッションの起動に `engine`: `POST /sessions/new` と MQTT のコマンドが `engine` を受け付ける(省略すると `claude-code`。`claude-code` を動かしていなくて、動かしているのが 1 つだけなら、そのエンジン)。`POST /sessions/:id/send` と MQTT の再開は、セッション ID からエンジンを引く。`POST /sessions/new` と `POST /sessions/:id/send` のレスポンスに `engine` を足した
+- `GET /processes` と `GET /managed` の各エントリに `engine`
+
+### Changed
+- Webhook のプロセス系のイベント(`session-started`、`session-error`、`session-timeout`、`cancel-initiated`、`process-exit`)の `engine` が、そのセッションのエンジンの値になった(これまでは、サーバーの 1 つのエンジンだった)。複数のエンジンを動かしているときだけ、これまでと違う
+- `watchDir` を書かない `claude-code` の設定は、これまで起動時にエラーだったが、`~/.claude/projects` を見るようになった
+- ドキュメント: 「1 プロセス = 1 エンジン」は、もう当てはまらない。設定の節、Codex の節、プロジェクト構造を訂正した
+
+### Removed
+- **`backendType`** を、Webhook のすべてのペイロードと `GET /info` で送らなくなった。`engine` と同じ意味で、値の書き方だけが違った(`claude_code` と `claude-code`)ので、`engine`(`claude-code`、`codex`)に一本化した。受け手は `engine` を読む。無ければ(claude-code-pipe は送らない)`claude-code` とみなす。JSON Schema は `backendType` を必須としなくなり、あってもなくても合う
+
+### Known issues
+- `claude-code` では、セッションのプロジェクトのパスを、ディレクトリの名前でキャッシュしている。作業ディレクトリ(`cwd`)を持たないセッションのファイルが先に読まれると、推測のパスがキャッシュされ、同じディレクトリの他のセッションのプロジェクトも、そのパスになる。claude-code-pipe から引き継いだ挙動で、まだ直していない
+
 ## [0.2.0] - 2026-10-10
 
 ### Added
