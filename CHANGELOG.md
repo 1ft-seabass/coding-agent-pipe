@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-10-12
+
+> **Breaking change for receivers (Codex):** tool calls now take the form Claude Code uses (see Changed). A receiver that read Codex tool calls as `name: "exec"` with a string `input` needs to be updated.
+
+### Added
+- Codex: a failed turn (for example, a model the account cannot use) is now emitted as a `session-error` Webhook with the reason in `error` (a human-readable sentence taken from Codex's record). It is read by watching the session files, so a failure of a session run directly in a terminal is also emitted. `pid` and `code` are not set. It does not appear in `GET /sessions/:id/messages`. Before, only the process exit (`process-exit`, exit code `1`) arrived, with no reason
+- Codex: `message.usage` is now carried on the assistant events of live delivery (the `assistant-response-completed` Webhook), as the most recently received value (the previous response's), because Codex writes the token counts after the response line. For a session that already has a record (for example a resumed one), the last value in the file is the starting value. The first response of a new session waits for its value (up to 1 second, then it is delivered without `usage`). The history (`GET /sessions/:id/messages`) is unchanged: each response's own value is on the last event of that response
+
+### Changed
+- **Codex tool calls take the form Claude Code uses.** A call that only runs shell commands becomes `name: "Bash"` with `input: { "command", "script" }` (several commands in one call are joined with newlines; `script` is the original JavaScript). The result (`tool_result`) is a single text with only the output body, and carries `is_error` (`true` when the script failed or a command's exit code is not 0). Other tools keep their tool names, and the `input` of a `function_call` is the parsed arguments object. A call that cannot be interpreted is delivered as before (`name: "exec"`, a string `input`). `tools` carries the actual names (`["Bash"]`). The JSON Schema now allows `input` to be a string as well as an object (a string remains only for an uninterpreted `exec`, or a `function_call` whose arguments are not valid JSON)
+
 ## [0.3.1] - 2026-10-12
 
 ### Added

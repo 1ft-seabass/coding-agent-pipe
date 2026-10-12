@@ -4,6 +4,11 @@
  * chokidar で watchDir 配下の指定拡張子のファイルを監視し、
  * 新しい行が追加されたら adapter の parse でパースして message イベントを発火する。
  * どのファイルを・どう解釈するかは adapter(observe / parse / sessionIdFromPath)が決める。
+ *
+ * 保留(holdForUsage): parse が返したイベントに holdForUsage: true が付いていたら、その値(トークン数など)が後の行で分かる合図として、
+ * 発火を保留する。そのファイルの、後続のイベントも、順番を守るために、保留の後ろに並べる。
+ * adapter が、後の行の parse で holdForUsage を外したら(イベントに値を入れて)、列を順に発火する。
+ * 外れないまま holdTimeoutMs が過ぎたら、そのまま(値なしで)順に発火する。
  */
 
 import fs from 'node:fs';
@@ -15,6 +20,12 @@ import { expandHome } from '../platform.js';
 /** watchDir が存在しないとき、現れるのを待つ確認の間隔(ミリ秒) */
 const WAIT_INTERVAL_MS = 5000;
 
+/**
+ * 保留したイベントを、値が分からないまま発火するまでの上限(ミリ秒)
+ * Codex は、トークン数の行を、応答の行の直後に書く(実測の 61 件で、中央値 49ms、90 パーセンタイル 136ms、最大 2651ms)
+ */
+const HOLD_TIMEOUT_MS = 1000;
+
 class FileTailSource extends EventEmitter {
   /**
    * @param {object} options
@@ -23,8 +34,9 @@ class FileTailSource extends EventEmitter {
    * @param {(line: string, filePath: string) => object|null} options.parse - 1行を正規化イベントに変換する(filePath は、その行があるファイル。ファイルごとの状態を持つ adapter が使う)
    * @param {(filePath: string) => string|null} [options.sessionIdFromPath] - sessionId が無い行の補完用
    * @param {number} [options.waitIntervalMs] - watchDir が存在しないとき、現れるのを待つ確認の間隔(既定 5000)
+   * @param {number} [options.holdTimeoutMs] - holdForUsage の付いたイベントを、値が分からないまま発火するまでの上限(既定 1000)
    */
-  constructor({ watchDir, extension, parse, sessionIdFromPath, waitIntervalMs }) {
+  constructor({ watchDir, extension, parse, sessionIdFromPath, waitIntervalMs, holdTimeoutMs }) {
     super();
     this.watchDir = expandHome(watchDir);
     this.extension = extension;
@@ -34,6 +46,61 @@ class FileTailSource extends EventEmitter {
     this.waitIntervalMs = waitIntervalMs || WAIT_INTERVAL_MS;
     this.waitTimer = null;
     this.watcher = null;
+    this.holdTimeoutMs = holdTimeoutMs ?? HOLD_TIMEOUT_MS;
+    this.held = new Map(); // ファイルパス → { queue: 発火待ちのイベント(先頭が holdForUsage)、timer }
+  }
+
+  /**
+   * 1 行を parse して、イベントを発火する(保留中のイベントがあれば、その後ろに並べる)。
+   * イベントが出なくても(トークン数の行など)、保留が解けているかを確かめる
+   */
+  handleLine(filePath, line) {
+    const event = this.parse(line, filePath);
+    if (event) {
+      // sessionId をファイルパスから推定して補完
+      if (!event.sessionId) {
+        event.sessionId = this.sessionIdFromPath(filePath);
+      }
+      // イベントの出どころ(ファイルパス)を追加
+      event.sourcePath = filePath;
+      this.dispatch(filePath, event);
+    }
+    this.releaseResolved(filePath);
+  }
+
+  dispatch(filePath, event) {
+    const held = this.held.get(filePath);
+    if (held) {
+      held.queue.push(event); // 先に保留中のイベントがあれば、順番を守って、後ろに並べる
+      return;
+    }
+    if (event.holdForUsage) {
+      const entry = { queue: [event], timer: null };
+      entry.timer = setTimeout(() => this.releaseAll(filePath), this.holdTimeoutMs);
+      entry.timer.unref();
+      this.held.set(filePath, entry);
+      return;
+    }
+    this.emit('message', event);
+  }
+
+  /** 先頭の保留が解けた(holdForUsage が外れた)ら、列を順に発火する */
+  releaseResolved(filePath) {
+    const held = this.held.get(filePath);
+    if (!held || held.queue[0].holdForUsage) return;
+    this.releaseAll(filePath);
+  }
+
+  /** 保留している列を、順に発火する(値が分からないままのものは、holdForUsage を外して) */
+  releaseAll(filePath) {
+    const held = this.held.get(filePath);
+    if (!held) return;
+    clearTimeout(held.timer);
+    this.held.delete(filePath);
+    for (const event of held.queue) {
+      delete event.holdForUsage;
+      this.emit('message', event);
+    }
   }
 
   /**
@@ -79,32 +146,14 @@ class FileTailSource extends EventEmitter {
 
         for (const line of lines) {
           if (!line.trim()) continue;
-
-          const event = this.parse(line, filePath);
-          if (event) {
-            // sessionId をファイルパスから推定して補完
-            if (!event.sessionId) {
-              event.sessionId = this.sessionIdFromPath(filePath);
-            }
-            // イベントの出どころ(ファイルパス)を追加
-            event.sourcePath = filePath;
-            this.emit('message', event);
-          }
+          this.handleLine(filePath, line);
         }
       });
 
       stream.on('end', () => {
         // 最後に残ったバッファも処理（改行なしで終わる場合）
         if (buffer.trim()) {
-          const event = this.parse(buffer, filePath);
-          if (event) {
-            if (!event.sessionId) {
-              event.sessionId = this.sessionIdFromPath(filePath);
-            }
-            // イベントの出どころ(ファイルパス)を追加
-            event.sourcePath = filePath;
-            this.emit('message', event);
-          }
+          this.handleLine(filePath, buffer);
         }
         // 読み込み位置を更新
         this.filePositions.set(filePath, currentSize);
@@ -230,6 +279,8 @@ class FileTailSource extends EventEmitter {
       clearInterval(this.waitTimer);
       this.waitTimer = null;
     }
+    for (const held of this.held.values()) clearTimeout(held.timer); // 保留中のイベントは、止めるときは出さない
+    this.held.clear();
     if (this.watcher) {
       await this.watcher.close();
       console.log('[watcher] Watching stopped');

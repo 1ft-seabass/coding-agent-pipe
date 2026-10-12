@@ -276,8 +276,9 @@ Put `codex` in `engines` (or set the legacy `engine` to `codex`) to handle OpenA
 | Responses of `POST /sessions/new` and `POST /sessions/:id/send` | `claudeCodeVersion` is not returned. `codingAgentVersion`, `model`, `cwd`, `permissionMode`, and `apiKeySource` are `null`, and `tools` is empty (Codex's first output does not carry them) |
 | Model | `model` in the start response stays `null` (Codex's first output does not carry it). The actual model is read from Codex's record (`turn_context`) and set as **`model` directly on assistant events** (the same position as `model` in `session-started` and the other process events, not inside `message`; for example the `assistant-response-completed` Webhook and `GET /sessions/:id/messages`). If `send` specifies `model`, the new value applies from that turn. User events do not carry it. When it has not been read yet (for example, when observation started in the middle of a turn), the field is absent. Assistant events of `claude-code` carry no `model` (only `session-started` has it) |
 | `GET /claude-version` | Not registered |
-| Tool calls | Appear under Codex's tool names (such as `exec`). One call can contain several commands |
-| Token counts | `totalTokens` and the like in `GET /sessions` are computed from Codex's records (`token_usage_record`). `input_tokens` excludes the part read from the cache (`cache_read_input_tokens`), to match Claude. They are not included in Webhooks |
+| Tool calls | Appear in a form close to Claude Code's. A call that only runs shell commands has `name: "Bash"` and `input: { "command": …, "script": … }` (`command` is the command to run; several commands in one call are joined with newlines; `script` is the original JavaScript Codex received). The result (`tool_result`) is a single text with only the output body, and carries `is_error: true` when it failed (the script failed, or a command's exit code is not 0). Other tools (`image_gen__imagegen`, `spawn_agent`, and so on) keep their tool names (the `input` of a `function_call` is the parsed arguments object). A call that cannot be interpreted keeps `name: "exec"` and the original string as `input` |
+| Token counts | `totalTokens` and the like in `GET /sessions` are computed from Codex's records (`token_usage_record`). `input_tokens` excludes the part read from the cache (`cache_read_input_tokens`), to match Claude. The `message.usage` in the `assistant-response-completed` Webhook carries **the most recently received value (the previous response's)**, because Codex writes the token counts after the response line. Only the first response of a new session has no previous value, so its delivery waits until the value is written (up to 1 second; after that it is delivered without `usage`). In the history (`GET /sessions/:id/messages`), each response's own value is on the last event of that response |
+| Turn failures | When a Codex turn fails (for example, a model the account cannot use), a `session-error` Webhook with the reason (`error`) is emitted. It is read by watching the session files, so failures of sessions run directly in a terminal are also emitted. It does not appear in the history (`GET /sessions/:id/messages`) (see [session-error and session-timeout](#session-error-and-session-timeout)) |
 | Sub-agents | A sub-agent started by Codex appears as a separate session. `isSubagent` is `true` in Webhooks, and it is excluded by default from `GET /sessions` and `GET /projects` (include it with `excludeAgents=false`) |
 | `cancel` | Stops on SIGINT (within a few hundred milliseconds in what was checked; exit code `1`). A cancelled session can be resumed afterwards |
 | MQTT, Windows | Not verified |
@@ -333,7 +334,7 @@ curl http://localhost:3100/health
 ```json
 {
   "status": "ok",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "uptime": 123.456
 }
 ```
@@ -361,7 +362,7 @@ curl http://localhost:3100/version
 ```json
 {
   "name": "coding-agent-pipe",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "description": "A pipe for coding agent CLI input/output using JSONL and Hono"
 }
 ```
@@ -386,7 +387,7 @@ curl http://localhost:3100/info
 
 ```json
 {
-  "version": "0.3.1",
+  "version": "0.4.0",
   "os": "linux",
   "communicationMode": "bidirectional",
   "pipeApp": "coding-agent-pipe",
@@ -1287,7 +1288,7 @@ The common `engine` is the value of the engine of that process's session (the en
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `pid` | number | Process ID |
+| `pid` | number | Process ID (not set on the `session-error` of a Codex turn failure) |
 | `model` | string\|null | The model of `session-started` |
 | `resumed` | boolean | In `session-started`, `true` when an existing session is resumed |
 | `code`, `signal` | number\|null, string\|null | The exit code and the exit signal of `process-exit` |
@@ -1301,7 +1302,7 @@ The common `engine` is the value of the engine of that process's session (the en
 | `user-message-received` | A user message was appended to the session file | Session file watching |
 | `assistant-response-completed` | An assistant response was appended | Session file watching |
 | `process-exit` | A process this pipe started exited | A process this pipe started |
-| `session-error` | Starting the process failed | A process this pipe started |
+| `session-error` | Starting the process failed. For Codex, also a failed turn (with the reason) | A process this pipe started (a Codex turn failure comes from session file watching) |
 | `session-timeout` | Timed out (60 seconds) without the startup being confirmed | A process this pipe started |
 | `cancel-initiated` | A cancel was requested | Cancel |
 
@@ -1316,7 +1317,7 @@ Message events are emitted by **watching the session files**, so they also cover
 ```json
 {
   "type": "user-message-received",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "sessionId": "11111111-1111-4111-8111-111111111111",
   "timestamp": "2026-09-01T00:33:20.000Z",
   "cwdPath": "/home/user/workspace/repos/coding-agent-pipe",
@@ -1342,7 +1343,7 @@ Message events are emitted by **watching the session files**, so they also cover
 ```json
 {
   "type": "assistant-response-completed",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "sessionId": "11111111-1111-4111-8111-111111111111",
   "timestamp": "2026-09-01T00:33:21.000Z",
   "cwdPath": "/home/user/workspace/repos/coding-agent-pipe",
@@ -1377,7 +1378,7 @@ Message events are emitted by **watching the session files**, so they also cover
 ```json
 {
   "type": "session-started",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "sessionId": "55555555-5555-4555-8555-555555555555",
   "timestamp": "2026-09-01T00:00:00.000Z",
   "cwdPath": "/home/user/workspace/repos/coding-agent-pipe",
@@ -1399,7 +1400,7 @@ Message events are emitted by **watching the session files**, so they also cover
 ```json
 {
   "type": "process-exit",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "sessionId": "55555555-5555-4555-8555-555555555555",
   "timestamp": "2026-09-01T00:00:05.000Z",
   "cwdPath": "/home/user/workspace/repos/coding-agent-pipe",
@@ -1435,6 +1436,19 @@ The common fields, plus `error`. When startup fails, the real session ID is unkn
 ```
 
 (The common fields are omitted. The `error` of `session-error` is, for example, `spawn script ENOENT`.)
+
+A **Codex turn failure** is also emitted as `session-error`. The real session ID is known then, so `sessionId` is not a temporary ID. `pid` and `code` are not set, and `error` holds the reason Codex returned (a human-readable sentence).
+
+```json
+{
+  "type": "session-error",
+  "engine": "codex",
+  "sessionId": "01a11b28-e195-7f51-b730-c49e06adc5ef",
+  "error": "The 'sonnet[1M]' model is not supported when using Codex with a ChatGPT account."
+}
+```
+
+(The common fields are omitted.)
 
 ---
 

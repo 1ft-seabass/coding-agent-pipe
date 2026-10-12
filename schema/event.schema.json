@@ -128,7 +128,7 @@
         "thinking": { "type": "string" },
         "id": { "type": "string", "description": "tool_use の呼び出し ID(後続の tool_result が tool_use_id で参照する)" },
         "name": { "type": "string" },
-        "input": { "type": "object" },
+        "input": { "anyOf": [{ "type": "object" }, { "type": "string" }], "description": "ツールへの入力。通常はオブジェクト。codex で解釈できない exec(JavaScript の呼び出し)だけは、元の文字列のまま" },
         "tool_use_id": { "type": "string" },
         "is_error": { "type": "boolean" }
       },

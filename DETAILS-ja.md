@@ -276,8 +276,9 @@ Webhook を受信する側が、coding-agent-pipe に送信 API でメッセー�
 | `POST /sessions/new`・`POST /sessions/:id/send` のレスポンス | `claudeCodeVersion` は返しません。`codingAgentVersion`・`model`・`cwd`・`permissionMode`・`apiKeySource` は `null`、`tools` は空です(Codex の最初の出力に、これらが載らないため) |
 | モデル | 起動のレスポンスの `model` は `null` のままです(Codex の最初の出力に載らないため)。実際のモデルは、Codex の記録(`turn_context`)から読み、**アシスタントのイベント直下の `model`** に載せます(`session-started` などの `model` と同じ位置。`message` の中ではありません。Webhook の `assistant-response-completed`、`GET /sessions/:id/messages` など)。`send` で `model` を指定すると、そのターンから新しい値になります。ユーザーのイベントには載りません。ターンの途中から観測を始めたときなど、まだ読んでいないときは、項目ごと付きません。`claude-code` のアシスタントのイベントには、`model` は付きません(`session-started` の `model` だけです) |
 | `GET /claude-version` | 登録されません |
-| ツール呼び出し | Codex のツール名(`exec` など)で出ます。1 回の呼び出しに、複数のコマンドが入ることがあります |
-| トークン数 | `GET /sessions` の `totalTokens` などは、Codex の記録(`token_usage_record`)から計算します。`input_tokens` は、キャッシュから読んだ分(`cache_read_input_tokens`)を除いた値で、Claude に揃えています。Webhook には載りません |
+| ツール呼び出し | Claude Code に近い形で出ます。シェルのコマンドだけの呼び出しは、`name` が `Bash`、`input` が `{ "command": …, "script": … }` です(`command` は実行するコマンドで、1 回の呼び出しに複数あれば、改行でつなぎます。`script` は、Codex が受け取った元の JavaScript です)。結果(`tool_result`)は、出力の本文だけの text になり、失敗したとき(スクリプトの失敗、またはコマンドの終了コードが 0 以外)は `is_error: true` が付きます。ほかのツール(`image_gen__imagegen`、`spawn_agent` など)は、ツール名のまま出ます(`function_call` の `input` は、引数を読み取ったオブジェクトです)。解釈できない呼び出しは、`name: "exec"`、`input` は元の文字列のままです |
+| トークン数 | `GET /sessions` の `totalTokens` などは、Codex の記録(`token_usage_record`)から計算します。`input_tokens` は、キャッシュから読んだ分(`cache_read_input_tokens`)を除いた値で、Claude に揃えています。Webhook の `assistant-response-completed` の `message.usage` には、**直前に受け取った値(1 つ前の応答の値)**が載ります(Codex は、トークン数を、応答の行より後に書くため)。新しいセッションの最初の応答だけは、まだ前の値が無いので、値が書かれるまで配信を待ちます(最大 1 秒。過ぎたら、`usage` なしで配信します)。履歴(`GET /sessions/:id/messages`)は、応答ごとの値が、その応答の最後のイベントに付きます |
+| ターンの失敗 | Codex のターンが失敗したとき(例: そのアカウントで使えないモデルの指定)は、理由(`error`)つきの Webhook `session-error` が出ます。セッションファイルの監視で読み取るので、ターミナルなどで直接動かしたセッションの失敗も、出ます。履歴(`GET /sessions/:id/messages`)には出ません([session-error と session-timeout](#session-error-と-session-timeout)を参照) |
 | サブエージェント | Codex が起動したサブエージェントは、別のセッションとして出ます。Webhook の `isSubagent` が `true` になり、`GET /sessions` と `GET /projects` の既定では除外されます(`excludeAgents=false` で含めます) |
 | `cancel` | SIGINT で止まります(確認した範囲では、数百ミリ秒。終了コードは `1`)。中断したセッションは、続けて再開できます |
 | MQTT・Windows | 動作を確かめていません |
@@ -333,7 +334,7 @@ curl http://localhost:3100/health
 ```json
 {
   "status": "ok",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "uptime": 123.456
 }
 ```
@@ -361,7 +362,7 @@ curl http://localhost:3100/version
 ```json
 {
   "name": "coding-agent-pipe",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "description": "A pipe for coding agent CLI input/output using JSONL and Hono"
 }
 ```
@@ -386,7 +387,7 @@ curl http://localhost:3100/info
 
 ```json
 {
-  "version": "0.3.1",
+  "version": "0.4.0",
   "os": "linux",
   "communicationMode": "bidirectional",
   "pipeApp": "coding-agent-pipe",
@@ -1287,7 +1288,7 @@ Webhook は、次の構造の JSON を、`POST`(`Content-Type: application/json`
 
 | フィールド | 型 | 説明 |
 |-------|------|-------------|
-| `pid` | number | プロセス ID |
+| `pid` | number | プロセス ID(Codex のターンの失敗の `session-error` には付きません) |
 | `model` | string\|null | `session-started` のモデル |
 | `resumed` | boolean | `session-started` で、既存セッションの再開なら `true` |
 | `code`・`signal` | number\|null・string\|null | `process-exit` の終了コードと、終了シグナル |
@@ -1301,7 +1302,7 @@ Webhook は、次の構造の JSON を、`POST`(`Content-Type: application/json`
 | `user-message-received` | セッションファイルに、ユーザーのメッセージが追記された | セッションファイルの監視 |
 | `assistant-response-completed` | アシスタントの応答が追記された | セッションファイルの監視 |
 | `process-exit` | この pipe が起動したプロセスが終了した | この pipe が起動したプロセス |
-| `session-error` | プロセスの起動に失敗した | この pipe が起動したプロセス |
+| `session-error` | プロセスの起動に失敗した。Codex では、ターンの失敗(理由つき)も | この pipe が起動したプロセス(Codex のターンの失敗は、セッションファイルの監視) |
 | `session-timeout` | 起動を確認できないまま、タイムアウト(60 秒)した | この pipe が起動したプロセス |
 | `cancel-initiated` | キャンセルが要求された | キャンセル |
 
@@ -1316,7 +1317,7 @@ Webhook は、次の構造の JSON を、`POST`(`Content-Type: application/json`
 ```json
 {
   "type": "user-message-received",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "sessionId": "11111111-1111-4111-8111-111111111111",
   "timestamp": "2026-09-01T00:33:20.000Z",
   "cwdPath": "/home/user/workspace/repos/coding-agent-pipe",
@@ -1342,7 +1343,7 @@ Webhook は、次の構造の JSON を、`POST`(`Content-Type: application/json`
 ```json
 {
   "type": "assistant-response-completed",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "sessionId": "11111111-1111-4111-8111-111111111111",
   "timestamp": "2026-09-01T00:33:21.000Z",
   "cwdPath": "/home/user/workspace/repos/coding-agent-pipe",
@@ -1377,7 +1378,7 @@ Webhook は、次の構造の JSON を、`POST`(`Content-Type: application/json`
 ```json
 {
   "type": "session-started",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "sessionId": "55555555-5555-4555-8555-555555555555",
   "timestamp": "2026-09-01T00:00:00.000Z",
   "cwdPath": "/home/user/workspace/repos/coding-agent-pipe",
@@ -1399,7 +1400,7 @@ Webhook は、次の構造の JSON を、`POST`(`Content-Type: application/json`
 ```json
 {
   "type": "process-exit",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "sessionId": "55555555-5555-4555-8555-555555555555",
   "timestamp": "2026-09-01T00:00:05.000Z",
   "cwdPath": "/home/user/workspace/repos/coding-agent-pipe",
@@ -1435,6 +1436,19 @@ Webhook は、次の構造の JSON を、`POST`(`Content-Type: application/json`
 ```
 
 (共通項目は省略しています。`session-error` の `error` は、たとえば `spawn script ENOENT` です。)
+
+**Codex のターンの失敗**も、`session-error` で出ます。このときは、本物のセッション ID が分かるので、`sessionId` は仮の ID ではありません。`pid` と `code` は付かず、`error` に、Codex が返した理由(人が読む文)が入ります。
+
+```json
+{
+  "type": "session-error",
+  "engine": "codex",
+  "sessionId": "01a11b28-e195-7f51-b730-c49e06adc5ef",
+  "error": "The 'sonnet[1M]' model is not supported when using Codex with a ChatGPT account."
+}
+```
+
+(共通項目は省略しています。)
 
 ---
 

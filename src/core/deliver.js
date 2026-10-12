@@ -206,6 +206,18 @@ function handleSubscriberEvent(subscriber, event, responseTime, serverInfo, adap
   // サブエージェントのセッションかどうかを判定
   const isSubagent = adapter.isSubagent(event.sourcePath);
 
+  // エラーのイベント(観測元が、エンジンの失敗を読み取ったもの。例: Codex のターンの失敗)は、session-error として配信する
+  if (event.error !== undefined) {
+    const projectPath = event.sourcePath ? adapter.resolveProject(event.sourcePath) : null;
+    handleProcessEvent(subscriber, 'session-error', {
+      sessionId: event.sessionId,
+      timestamp: event.timestamp,
+      error: event.error,
+      projectPath
+    }, serverInfo);
+    return;
+  }
+
   // user メッセージの場合
   if (event.message && event.message.role === 'user') {
     // source を判定（API経由かどうか）

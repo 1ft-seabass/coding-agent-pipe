@@ -6,6 +6,17 @@
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-10-12
+
+> **受け手に影響する変更(Codex):** ツール呼び出しが、Claude Code と同じ形になりました(Changed を参照)。Codex のツール呼び出しを、`name: "exec"` と文字列の `input` として読んでいた受け手は、更新が必要です。
+
+### Added
+- Codex: ターンが失敗したとき(例: そのアカウントで使えないモデルの指定)に、理由つきの Webhook `session-error` が出る(`error` に、Codex の記録から取った、人が読む文が入る)。セッションファイルの監視で読み取るので、ターミナルなどで直接動かしたセッションの失敗も出る。`pid` と `code` は付かない。`GET /sessions/:id/messages` には出ない。これまでは、プロセスの終了(`process-exit`、終了コード `1`)だけが届き、理由は分からなかった
+- Codex: ライブの配信(Webhook の `assistant-response-completed`)のアシスタントのイベントに、`message.usage` を載せる。直前に受け取った値(1 つ前の応答の値)が載る(Codex は、トークン数を、応答の行より後に書くため)。すでに記録のあるセッション(再開したものなど)は、ファイルの最後の値が、最初の値になる。新しいセッションの最初の応答は、値が書かれるまで配信を待つ(最大 1 秒。過ぎたら `usage` なしで配信)。履歴(`GET /sessions/:id/messages`)は変わらない(応答ごとの値が、その応答の最後のイベントに付く)
+
+### Changed
+- **Codex のツール呼び出しが、Claude Code と同じ形になった。** シェルのコマンドだけの呼び出しは、`name: "Bash"`、`input: { "command", "script" }` になる(1 回の呼び出しに複数のコマンドがあれば、改行でつなぐ。`script` は元の JavaScript)。結果(`tool_result`)は、出力の本文だけの text 1 つになり、`is_error`(スクリプトの失敗、またはコマンドの終了コードが 0 以外のとき `true`)が付く。ほかのツールはツール名のままで、`function_call` の `input` は、引数を読み取ったオブジェクトになる。解釈できない呼び出しは、これまでどおり(`name: "exec"`、文字列の `input`)。`tools` は実際の名前(`["Bash"]`)になる。JSON Schema は、`input` を、オブジェクトに加えて、文字列も許すようにした(文字列が残るのは、解釈できない `exec` と、引数が JSON でない `function_call` だけ)
+
 ## [0.3.1] - 2026-10-12
 
 ### Added
