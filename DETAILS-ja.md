@@ -55,6 +55,7 @@ coding-agent-pipe は、コーディングエージェントのセッション�
   "send": {
     "defaultAllowedTools": ["Read", "Grep", "Write", "Bash"],
     "cancelTimeoutMs": 3000,
+    "startTimeoutMs": 60000,
     "defaultDangerouslySkipPermissions": false
   },
   "mqtt": {
@@ -113,6 +114,7 @@ coding-agent-pipe は、コーディングエージェントのセッション�
 |-------|------|----------|---------|-------------|
 | `defaultAllowedTools` | array | No | `[]` | **MQTT のコマンドで**使う、許可ツールの既定値。REST の送信 API(`POST /sessions/new`、`POST /sessions/:id/send`)は、これを使いません。リクエストの `allowedTools` を、そのまま渡します(省略すると、ツールの指定なし) |
 | `cancelTimeoutMs` | number | No | `3000` | キャンセル操作で、SIGINT のあと SIGTERM に進むまでのミリ秒 |
+| `startTimeoutMs` | number | No | `60000` | エージェントの起動を確認する(起動時の出力 `system/init` を受け取る)までの待ち時間(ミリ秒)。過ぎると、`session-timeout` を出して、プロセスを止めます。起動を確認できたあとは、実行の長さに制限はありません。1 以上 2147483647 以下の整数です(それ以外は、起動時のエラーになります)。MCP サーバーやスキルが多く、起動に時間がかかる環境では、長くします。新規起動・既存セッションへの送信・MQTT のコマンドのすべてに効きます |
 | `defaultDangerouslySkipPermissions` | boolean | No | `false` | **⚠️ 危険:** 権限確認をスキップするデフォルト値。`true` にすると、REST の送信 API の全リクエストで、権限確認がスキップされます(リクエストで明示的に上書きしない限り)。詳細は[セキュリティに関する注意事項](#セキュリティに関する注意事項)を参照 |
 
 #### upload と viewer の既定値
@@ -334,7 +336,7 @@ curl http://localhost:3100/health
 ```json
 {
   "status": "ok",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "uptime": 123.456
 }
 ```
@@ -362,7 +364,7 @@ curl http://localhost:3100/version
 ```json
 {
   "name": "coding-agent-pipe",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "A pipe for coding agent CLI input/output using JSONL and Hono"
 }
 ```
@@ -387,7 +389,7 @@ curl http://localhost:3100/info
 
 ```json
 {
-  "version": "0.4.0",
+  "version": "0.4.1",
   "os": "linux",
   "communicationMode": "bidirectional",
   "pipeApp": "coding-agent-pipe",
@@ -795,9 +797,8 @@ curl -X POST http://localhost:3100/sessions/new \
 | `500` | `{ "error": "Failed to start new session" }` | 起動に失敗した(理由は、ログにだけ出る。下の注意を参照) |
 
 > **注意: `500` の理由は返りません。** 次のような場合に起きます(いずれも、claude-code-pipe から引き継いだ既知の挙動です。[エラーと制限](#エラーと制限)を参照)。
-> - エージェントの起動時の出力(`system/init`)が、約 4KB を超えると、起動を検知できないことがある
 > - プロンプトが長すぎる(約 128KB。`\` `"` `` ` `` `$` が多いと約 64KB)
-> - `script` コマンドがない、エージェントが起動しない、起動のタイムアウト(60 秒)
+> - `script` コマンドがない、エージェントが起動しない、起動のタイムアウト(既定は 60 秒。`send.startTimeoutMs` で変えられます)
 
 #### `POST /sessions/:id/send`
 
@@ -1303,7 +1304,7 @@ Webhook は、次の構造の JSON を、`POST`(`Content-Type: application/json`
 | `assistant-response-completed` | アシスタントの応答が追記された | セッションファイルの監視 |
 | `process-exit` | この pipe が起動したプロセスが終了した | この pipe が起動したプロセス |
 | `session-error` | プロセスの起動に失敗した。Codex では、ターンの失敗(理由つき)も | この pipe が起動したプロセス(Codex のターンの失敗は、セッションファイルの監視) |
-| `session-timeout` | 起動を確認できないまま、タイムアウト(60 秒)した | この pipe が起動したプロセス |
+| `session-timeout` | 起動を確認できないまま、タイムアウト(既定は 60 秒。`send.startTimeoutMs`)した | この pipe が起動したプロセス |
 | `cancel-initiated` | キャンセルが要求された | キャンセル |
 
 メッセージ系は、**セッションファイルを監視して**出るので、ターミナルなどで直接動かしているセッションも、含まれます(`source: "cli"`)。プロセス系は、この pipe が起動したものだけです。
@@ -1317,7 +1318,7 @@ Webhook は、次の構造の JSON を、`POST`(`Content-Type: application/json`
 ```json
 {
   "type": "user-message-received",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "sessionId": "11111111-1111-4111-8111-111111111111",
   "timestamp": "2026-09-01T00:33:20.000Z",
   "cwdPath": "/home/user/workspace/repos/coding-agent-pipe",
@@ -1343,7 +1344,7 @@ Webhook は、次の構造の JSON を、`POST`(`Content-Type: application/json`
 ```json
 {
   "type": "assistant-response-completed",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "sessionId": "11111111-1111-4111-8111-111111111111",
   "timestamp": "2026-09-01T00:33:21.000Z",
   "cwdPath": "/home/user/workspace/repos/coding-agent-pipe",
@@ -1378,7 +1379,7 @@ Webhook は、次の構造の JSON を、`POST`(`Content-Type: application/json`
 ```json
 {
   "type": "session-started",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "sessionId": "55555555-5555-4555-8555-555555555555",
   "timestamp": "2026-09-01T00:00:00.000Z",
   "cwdPath": "/home/user/workspace/repos/coding-agent-pipe",
@@ -1400,7 +1401,7 @@ Webhook は、次の構造の JSON を、`POST`(`Content-Type: application/json`
 ```json
 {
   "type": "process-exit",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "sessionId": "55555555-5555-4555-8555-555555555555",
   "timestamp": "2026-09-01T00:00:05.000Z",
   "cwdPath": "/home/user/workspace/repos/coding-agent-pipe",
@@ -1482,7 +1483,6 @@ Webhook は、次の構造の JSON を、`POST`(`Content-Type: application/json`
 
 | 挙動 | 影響 | 回避策 |
 |-------|-------------|-------------|
-| エージェントの起動時の出力(`system/init`)が約 4KB を超えると、起動を検知できないことがある(境界は不安定で、確率的に失敗する) | `POST /sessions/new`、`POST /sessions/:id/send` が `500`(`Failed to start new session`)になる。エージェントのプロセスは動き続けることがある | スキル・プラグイン・MCP サーバーを減らして、出力を小さくする |
 | プロンプトの上限は約 128KB。`\` `"` `` ` `` `$` が多いと、エスケープで 2 倍になり、約 64KB | `500`(理由の説明なし) | プロンプトを短くする。長い内容は、添付(`POST /attachments`)で渡して、パスをプロンプトに書く |
 | 同じセッションに、続けて 2 回送る | 最初のプロセスが管理から外れ、`DELETE /processes`・`cancel` で止められない | 前の送信が終わってから、次を送る |
 | 1 行の書き込みが、100ms 以上空いて分割されると、その行を失う | まれに、メッセージ系のイベントが欠ける | (エージェント側の書き込みの仕方に依存) |
@@ -1587,8 +1587,8 @@ ls ~/.claude/projects
 - `script` コマンドがない(Linux・macOS・WSL では、エージェントの出力を PTY 経由で受け取るために必要)
 - `claude` が、`PATH` にない
 - プロンプトが長すぎる([既知の挙動](#既知の挙動claude-code-pipe-から引き継いでいるもの)を参照)
-- エージェントの起動時の出力が大きすぎて、起動を検知できない(同上)
-- 起動のタイムアウト(60 秒)
+- エージェントの起動時の出力に、改行のない出力が 8M 文字を超えて続く(極端に大きい出力。起動を検知するのをあきらめます)
+- 起動のタイムアウト(既定は 60 秒。`send.startTimeoutMs` で変えられます)
 
 ---
 

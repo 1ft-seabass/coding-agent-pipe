@@ -9,7 +9,7 @@ import { Hono } from 'hono';
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { startNewSession, sendToSession, getManagedProcesses, killProcess, killAllProcesses } from './process.js';
+import { startNewSession, sendToSession, getManagedProcesses, killProcess, killAllProcesses, resolveStartTimeoutMs } from './process.js';
 import { getOsInfo } from './platform.js';
 import { getGitStatus, getGitLog, isPathGitIgnored } from './git-info.js';
 
@@ -160,6 +160,8 @@ function createApiRouter(config, engines) {
 
   // デフォルト値を取得
   const defaultDangerouslySkipPermissions = config?.send?.defaultDangerouslySkipPermissions || false;
+  // 起動を確認する(init を受け取る)までの待ち時間(config.send.startTimeoutMs。未指定は 60 秒)
+  const startTimeoutMs = resolveStartTimeoutMs(config?.send);
 
   // セッションメタデータのインメモリキャッシュ
   const sessionMetadataCache = new Map();
@@ -860,7 +862,8 @@ function createApiRouter(config, engines) {
         disallowedTools: disallowedTools || [],
         model: model || undefined,
         dangerouslySkipPermissions: skipPermissions,
-        projectPath: workingDirectory
+        projectPath: workingDirectory,
+        startTimeoutMs
       });
 
       return c.json({
@@ -973,7 +976,8 @@ function createApiRouter(config, engines) {
         disallowedTools: disallowedTools || [],
         model: model || undefined,
         dangerouslySkipPermissions: skipPermissions,
-        projectPath: workingDirectory
+        projectPath: workingDirectory,
+        startTimeoutMs
       });
 
       return c.json({

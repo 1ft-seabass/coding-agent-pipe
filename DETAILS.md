@@ -55,6 +55,7 @@ Copy `config.example.json` to `config.json` and edit it. (`config.json` is read 
   "send": {
     "defaultAllowedTools": ["Read", "Grep", "Write", "Bash"],
     "cancelTimeoutMs": 3000,
+    "startTimeoutMs": 60000,
     "defaultDangerouslySkipPermissions": false
   },
   "mqtt": {
@@ -113,6 +114,7 @@ Copy `config.example.json` to `config.json` and edit it. (`config.json` is read 
 |-------|------|----------|---------|-------------|
 | `defaultAllowedTools` | array | No | `[]` | Default allowed tools used **for MQTT commands**. The REST send APIs (`POST /sessions/new`, `POST /sessions/:id/send`) do not use it. They pass the request's `allowedTools` as is (if omitted, no tools are specified) |
 | `cancelTimeoutMs` | number | No | `3000` | Milliseconds a cancel operation waits after SIGINT before moving on to SIGTERM |
+| `startTimeoutMs` | number | No | `60000` | Milliseconds to wait for the agent's startup to be confirmed (the startup output `system/init` is received). After that, `session-timeout` is emitted and the process is stopped. Once the startup is confirmed, there is no limit on how long a run takes. An integer from 1 to 2147483647 (anything else is a startup error). Raise it for environments with many MCP servers or skills, where the startup is slow. It applies to starting a session, sending to an existing session, and MQTT commands |
 | `defaultDangerouslySkipPermissions` | boolean | No | `false` | **⚠️ DANGEROUS:** Default value for skipping permission confirmations. When `true`, every request to the REST send APIs skips permission confirmations (unless the request explicitly overrides it). See [Security Considerations](#security-considerations) for details |
 
 #### Defaults for upload and viewer
@@ -334,7 +336,7 @@ curl http://localhost:3100/health
 ```json
 {
   "status": "ok",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "uptime": 123.456
 }
 ```
@@ -362,7 +364,7 @@ curl http://localhost:3100/version
 ```json
 {
   "name": "coding-agent-pipe",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "A pipe for coding agent CLI input/output using JSONL and Hono"
 }
 ```
@@ -387,7 +389,7 @@ curl http://localhost:3100/info
 
 ```json
 {
-  "version": "0.4.0",
+  "version": "0.4.1",
   "os": "linux",
   "communicationMode": "bidirectional",
   "pipeApp": "coding-agent-pipe",
@@ -795,9 +797,8 @@ At startup, the Webhook `session-started` is delivered (later followed by `user-
 | `500` | `{ "error": "Failed to start new session" }` | Startup failed (the reason appears only in the log; see the note below) |
 
 > **Note: The reason for a `500` is not returned.** It happens in cases such as the following (all are known behaviors inherited from claude-code-pipe; see [Errors and Limits](#errors-and-limits)).
-> - If the agent's startup output (`system/init`) exceeds about 4KB, the startup may not be detected
 > - The prompt is too long (about 128KB; about 64KB when it contains many `\` `"` `` ` `` `$`)
-> - The `script` command is missing, the agent does not start, or the startup times out (60 seconds)
+> - The `script` command is missing, the agent does not start, or the startup times out (60 seconds by default; set `send.startTimeoutMs` to change it)
 
 #### `POST /sessions/:id/send`
 
@@ -1303,7 +1304,7 @@ The common `engine` is the value of the engine of that process's session (the en
 | `assistant-response-completed` | An assistant response was appended | Session file watching |
 | `process-exit` | A process this pipe started exited | A process this pipe started |
 | `session-error` | Starting the process failed. For Codex, also a failed turn (with the reason) | A process this pipe started (a Codex turn failure comes from session file watching) |
-| `session-timeout` | Timed out (60 seconds) without the startup being confirmed | A process this pipe started |
+| `session-timeout` | Timed out (60 seconds by default; `send.startTimeoutMs`) without the startup being confirmed | A process this pipe started |
 | `cancel-initiated` | A cancel was requested | Cancel |
 
 Message events are emitted by **watching the session files**, so they also cover sessions run directly in a terminal or elsewhere (`source: "cli"`). Process events cover only processes this pipe started.
@@ -1317,7 +1318,7 @@ Message events are emitted by **watching the session files**, so they also cover
 ```json
 {
   "type": "user-message-received",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "sessionId": "11111111-1111-4111-8111-111111111111",
   "timestamp": "2026-09-01T00:33:20.000Z",
   "cwdPath": "/home/user/workspace/repos/coding-agent-pipe",
@@ -1343,7 +1344,7 @@ Message events are emitted by **watching the session files**, so they also cover
 ```json
 {
   "type": "assistant-response-completed",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "sessionId": "11111111-1111-4111-8111-111111111111",
   "timestamp": "2026-09-01T00:33:21.000Z",
   "cwdPath": "/home/user/workspace/repos/coding-agent-pipe",
@@ -1378,7 +1379,7 @@ Message events are emitted by **watching the session files**, so they also cover
 ```json
 {
   "type": "session-started",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "sessionId": "55555555-5555-4555-8555-555555555555",
   "timestamp": "2026-09-01T00:00:00.000Z",
   "cwdPath": "/home/user/workspace/repos/coding-agent-pipe",
@@ -1400,7 +1401,7 @@ Message events are emitted by **watching the session files**, so they also cover
 ```json
 {
   "type": "process-exit",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "sessionId": "55555555-5555-4555-8555-555555555555",
   "timestamp": "2026-09-01T00:00:05.000Z",
   "cwdPath": "/home/user/workspace/repos/coding-agent-pipe",
@@ -1482,7 +1483,6 @@ The following behaviors are inherited from claude-code-pipe and are unchanged fo
 
 | Behavior | Impact | Workaround |
 |-------|-------------|-------------|
-| If the agent's startup output (`system/init`) exceeds about 4KB, the startup may not be detected (the boundary is unstable and failure is probabilistic) | `POST /sessions/new` and `POST /sessions/:id/send` return `500` (`Failed to start new session`). The agent's process may keep running | Reduce skills, plugins, and MCP servers to make the output smaller |
 | The prompt limit is about 128KB. With many `\` `"` `` ` `` `$`, escaping doubles the size and the limit becomes about 64KB | `500` (no explanation of the reason) | Shorten the prompt. Pass long content as an attachment (`POST /attachments`) and write the path in the prompt |
 | Sending twice in a row to the same session | The first process is dropped from management and cannot be stopped by `DELETE /processes` or `cancel` | Send the next message after the previous send has finished |
 | If a single line is written in pieces with a gap of 100ms or more, that line is lost | Rarely, a message event is missing | (Depends on how the agent writes) |
@@ -1587,8 +1587,8 @@ ls ~/.claude/projects
 - The `script` command is missing (on Linux, macOS, and WSL, it is required to receive the agent's output through a PTY)
 - `claude` is not in `PATH`
 - The prompt is too long (see [Known behaviors](#known-behaviors-inherited-from-claude-code-pipe))
-- The agent's startup output is too large for the startup to be detected (same as above)
-- The startup timed out (60 seconds)
+- The agent's startup output has more than 8M characters in a row without a line break (an extremely large output; the pipe gives up detecting the startup)
+- The startup timed out (60 seconds by default; set `send.startTimeoutMs` to change it)
 
 ---
 

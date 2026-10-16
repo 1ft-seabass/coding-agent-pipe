@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-10-16
+
+### Added
+- `send.startTimeoutMs` (default `60000`): how long to wait for an agent's startup to be confirmed (the `system/init` output of Claude Code, `thread.started` of Codex). After that, `session-timeout` is emitted and the process is stopped. It applies to starting a session, sending to an existing session, and MQTT commands. Without it, the wait is 60 seconds as before. An invalid value (not an integer from 1 to 2147483647) is a startup error, not silently replaced by the default. Once the startup is confirmed, there is still no limit on how long a run takes. Useful for environments with many MCP servers, where Claude Code starts slowly
+
+### Fixed
+- A startup is now detected even when the agent's startup output (`system/init`) arrives in more than one piece. The output goes through a PTY (`script`), and a large `init` line (many MCP tools, skills, or slash commands) can be split. The pipe used to read only the piece in hand, so a split line was never read: `POST /sessions/new` and `POST /sessions/:id/send` returned `500` (or timed out after 60 seconds). It now collects the output and reads it line by line. A line that is not JSON no longer makes the pipe skip the `init` line next to it, and a multi-byte character cut at a piece boundary is no longer broken. (The size at which a split happens is not fixed: it depends on the environment and the timing. A split was seen with an `init` of about 5.5KB in one real environment, while in another measurement (Claude Code 2.1.293, no MCP servers) an `init` of up to about 12KB always arrived in one piece and one of about 25KB was split in 2 of 3 runs.) This was known as "the startup output exceeds about 4KB" and is removed from the known behaviors
+
 ## [0.4.0] - 2026-10-12
 
 > **Breaking change for receivers (Codex):** tool calls now take the form Claude Code uses (see Changed). A receiver that read Codex tool calls as `name: "exec"` with a string `input` needs to be updated.

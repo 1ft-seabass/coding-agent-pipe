@@ -16,7 +16,7 @@ import { createEngines } from './core/engines.js';
 import { createSource } from './core/sources/index.js';
 import { createApiRouter, cleanupOldAttachments } from './core/api.js';
 import { setupSubscribers } from './core/deliver.js';
-import { getManagedProcesses, processEvents } from './core/process.js';
+import { getManagedProcesses, processEvents, resolveStartTimeoutMs } from './core/process.js';
 import { cancel } from './core/canceller.js';
 import { setupMqttReceiver } from './core/mqtt-receiver.js';
 import { parseSize, jsonBodyParser, BadRequestError, safeEqual } from './core/http-utils.js';
@@ -36,6 +36,14 @@ let engines;
 try {
   const { adapters, defaultId } = await loadAdapters(config);
   engines = createEngines(adapters, defaultId, DEFAULT_ENGINE);
+} catch (error) {
+  console.error(`[index] ${error.message}`);
+  process.exit(1);
+}
+
+// 起動のタイムアウト(config.send.startTimeoutMs)が不正なら、起動時にエラーにする(黙って既定に戻さない)
+try {
+  resolveStartTimeoutMs(config.send);
 } catch (error) {
   console.error(`[index] ${error.message}`);
   process.exit(1);

@@ -8,6 +8,7 @@
  */
 
 import EventEmitter from 'node:events';
+import { StringDecoder } from 'node:string_decoder';
 
 // sessionId → { proc, pid, startedAt } のマップ
 const managedProcesses = new Map();
@@ -15,8 +16,78 @@ const managedProcesses = new Map();
 // EventEmitter のインスタンス
 const processEvents = new EventEmitter();
 
-// タイムアウト設定（デフォルト: 60秒）
+// タイムアウト設定（デフォルト: 60秒）。起動を確認する(init を受け取る)までの待ち時間。config.send.startTimeoutMs で変えられる
 const SESSION_START_TIMEOUT_MS = 60 * 1000;
+
+// setTimeout に渡せる最大の値(これを超えると、1ms として扱われてしまう)
+const MAX_TIMEOUT_MS = 2147483647;
+
+// init が見つかるまでに、溜めておく文字数の上限(改行のない出力が続くときに、メモリを使い切らないため)
+const MAX_INIT_BUFFER_CHARS = 8 * 1024 * 1024;
+
+/**
+ * config.send.startTimeoutMs を、起動のタイムアウト(ミリ秒)として読む
+ * 未指定(undefined・null)なら、既定の 60 秒。指定するなら、1 以上 2147483647 以下の整数(それ以外は、黙って既定に戻さず、エラーにする)
+ * @param {object} [send] - config.send
+ * @returns {number}
+ */
+function resolveStartTimeoutMs(send) {
+  const value = send?.startTimeoutMs;
+  if (value === undefined || value === null) return SESSION_START_TIMEOUT_MS;
+  if (!Number.isInteger(value) || value < 1 || value > MAX_TIMEOUT_MS) {
+    throw new Error(`config.send.startTimeoutMs must be an integer from 1 to ${MAX_TIMEOUT_MS} (milliseconds), got ${JSON.stringify(value)}`);
+  }
+  return value;
+}
+
+/**
+ * 標準出力から、init の行を探す部品
+ * 標準出力は、PTY(script)を通るので、1 行(init)が、2 回以上のデータに分かれて届くことがある(init が大きいとき)。
+ * そのため、データを溜めて、改行で行に分けてから、1 行ずつ読む。
+ *   - 複数バイトの文字が、データの区切りをまたいでも壊れないよう、StringDecoder で文字に直す
+ *   - JSON でない行(警告など)が混ざっても、その行だけを飛ばす
+ *   - 改行で終わっていない最後の部分も、JSON として完結していれば(「}」で終わり、読める)、1 行として読む
+ *   - init が見つかったら、以後は何も溜めない。見つからないまま溜めた文字数が上限を超えたら、あきらめる(以後は何も溜めない)
+ * @param {(json: object) => (object|null)} readInit - 1 つの JSON を、init 情報に直す(init でなければ null)
+ * @returns {{ feed: (chunk: (Buffer|string)) => (object|null) }} feed は、init が見つかったときだけ、その情報を返す
+ */
+function createInitReader(readInit) {
+  const decoder = new StringDecoder('utf8');
+  let pending = '';
+  let finished = false;
+
+  const readLine = (line) => {
+    const text = line.trim();
+    if (!text) return null;
+    let json;
+    try {
+      json = JSON.parse(text);
+    } catch {
+      return null; // JSON でない行は、飛ばす
+    }
+    return readInit(json);
+  };
+
+  return {
+    feed(chunk) {
+      if (finished) return null;
+      pending += typeof chunk === 'string' ? chunk : decoder.write(chunk);
+      const lines = pending.split('\n');
+      pending = lines.pop();
+      for (const line of lines) {
+        const init = readLine(line);
+        if (init) { finished = true; pending = ''; return init; }
+      }
+      // 改行で終わっていない最後の部分が、JSON として完結していれば、1 行として読む
+      if (pending.trimEnd().endsWith('}')) {
+        const init = readLine(pending);
+        if (init) { finished = true; pending = ''; return init; }
+      }
+      if (pending.length > MAX_INIT_BUFFER_CHARS) { finished = true; pending = ''; }
+      return null;
+    }
+  };
+}
 
 /**
  * 新しいセッションを開始
@@ -35,7 +106,7 @@ const SESSION_START_TIMEOUT_MS = 60 * 1000;
  * @returns {Promise<object>} { pid, sessionId } (sessionIdは実際のUUID)
  */
 function startNewSession(driver, prompt, options = {}) {
-  const { cwd, allowedTools, disallowedTools, model, dangerouslySkipPermissions, projectPath, engine, onData, onError, onExit } = options;
+  const { cwd, allowedTools, disallowedTools, model, dangerouslySkipPermissions, projectPath, engine, onData, onError, onExit, startTimeoutMs } = options;
   return new Promise((resolve, reject) => {
     const proc = driver.spawnProcess(
       driver.buildArgs({ prompt, allowedTools, disallowedTools, model, dangerouslySkipPermissions }),
@@ -77,60 +148,51 @@ function startNewSession(driver, prompt, options = {}) {
         managedProcesses.delete(tempSessionId);
         reject(timeoutError);
       }
-    }, SESSION_START_TIMEOUT_MS);
+    }, startTimeoutMs ?? SESSION_START_TIMEOUT_MS);
 
-    // stdout をコールバックに流す
+    // stdout をコールバックに流す。最初の行(init)からセッションIDを抽出する
+    // (データは、行の途中で分かれて届くことがあるので、溜めてから行ごとに読む)
+    const initReader = createInitReader((json) => {
+      const init = driver.parseInit(json);
+      return init && init.sessionId ? init : null;
+    });
     proc.stdout.on('data', (data) => {
-      const dataStr = data.toString();
-
-      // 最初の行からセッションIDを抽出
       if (!firstLineReceived) {
-        try {
-          const lines = dataStr.split('\n');
-          for (const line of lines) {
-            if (line.trim()) {
-              const json = JSON.parse(line);
-              const init = driver.parseInit(json);
-              if (init && init.sessionId) {
-                const { sessionId: initSessionId, ...initInfo } = init;
-                actualSessionId = initSessionId;
-                firstLineReceived = true;
+        const init = initReader.feed(data);
+        if (init) {
+          const { sessionId: initSessionId, ...initInfo } = init;
+          actualSessionId = initSessionId;
+          firstLineReceived = true;
 
-                // 一時IDから実際のセッションIDに移行
-                const tempInfo = managedProcesses.get(tempSessionId);
-                managedProcesses.delete(tempSessionId);
-                managedProcesses.set(actualSessionId, tempInfo);
+          // 一時IDから実際のセッションIDに移行
+          const tempInfo = managedProcesses.get(tempSessionId);
+          managedProcesses.delete(tempSessionId);
+          managedProcesses.set(actualSessionId, tempInfo);
 
-                // タイムアウトをクリア
-                if (sessionStartTimeout) {
-                  clearTimeout(sessionStartTimeout);
-                  sessionStartTimeout = null;
-                }
-
-                console.log(`[process] Started new session: sessionId=${actualSessionId}, pid=${pid}, model=${initInfo.model}`);
-
-                // session-started イベント発行
-                processEvents.emit('session-started', {
-                  sessionId: actualSessionId,
-                  pid,
-                  timestamp: new Date().toISOString(),
-                  projectPath: projectPath || null,
-                  model: initInfo.model,
-                  ...(engine && { engine })
-                });
-
-                resolve({ pid, sessionId: actualSessionId, ...initInfo });
-                break;
-              }
-            }
+          // タイムアウトをクリア
+          if (sessionStartTimeout) {
+            clearTimeout(sessionStartTimeout);
+            sessionStartTimeout = null;
           }
-        } catch (err) {
-          // JSONパースエラーは無視（次の行で再試行）
+
+          console.log(`[process] Started new session: sessionId=${actualSessionId}, pid=${pid}, model=${initInfo.model}`);
+
+          // session-started イベント発行
+          processEvents.emit('session-started', {
+            sessionId: actualSessionId,
+            pid,
+            timestamp: new Date().toISOString(),
+            projectPath: projectPath || null,
+            model: initInfo.model,
+            ...(engine && { engine })
+          });
+
+          resolve({ pid, sessionId: actualSessionId, ...initInfo });
         }
       }
 
       if (onData) {
-        onData(dataStr);
+        onData(data.toString());
       }
     });
 
@@ -219,7 +281,7 @@ function startNewSession(driver, prompt, options = {}) {
  * @returns {object} { pid, sessionId }
  */
 function sendToSession(driver, sessionId, prompt, options = {}) {
-  const { cwd, allowedTools, disallowedTools, model, dangerouslySkipPermissions, projectPath, engine, onData, onError, onExit } = options;
+  const { cwd, allowedTools, disallowedTools, model, dangerouslySkipPermissions, projectPath, engine, onData, onError, onExit, startTimeoutMs } = options;
   return new Promise((resolve, reject) => {
     const proc = driver.spawnProcess(
       driver.buildArgs({ prompt, resumeId: sessionId, allowedTools, disallowedTools, model, dangerouslySkipPermissions }),
@@ -258,52 +320,40 @@ function sendToSession(driver, sessionId, prompt, options = {}) {
         managedProcesses.delete(sessionId);
         reject(timeoutError);
       }
-    }, SESSION_START_TIMEOUT_MS);
+    }, startTimeoutMs ?? SESSION_START_TIMEOUT_MS);
 
-    // stdout をコールバックに流す
+    // stdout をコールバックに流す。最初の行(init)から、モデルなどを抽出する
+    // (データは、行の途中で分かれて届くことがあるので、溜めてから行ごとに読む)
+    const initReader = createInitReader((json) => driver.parseInit(json));
     proc.stdout.on('data', (data) => {
-      const dataStr = data.toString();
-
-      // 最初の行から init イベントのモデルを抽出
       if (!firstLineReceived) {
-        try {
-          const lines = dataStr.split('\n');
-          for (const line of lines) {
-            if (line.trim()) {
-              const json = JSON.parse(line);
-              const init = driver.parseInit(json);
-              if (init) {
-                const { sessionId: _initSessionId, ...initInfo } = init;
-                firstLineReceived = true;
-                if (sendTimeout) {
-                  clearTimeout(sendTimeout);
-                  sendTimeout = null;
-                }
-                console.log(`[process] Sent to existing session: sessionId=${sessionId}, pid=${pid}, model=${initInfo.model}`);
-
-                // session-started イベント発行（既存セッション再開、init 後に model を含めて発行）
-                processEvents.emit('session-started', {
-                  sessionId,
-                  pid,
-                  timestamp: new Date().toISOString(),
-                  resumed: true,
-                  projectPath: projectPath || null,
-                  model: initInfo.model,
-                  ...(engine && { engine })
-                });
-
-                resolve({ pid, sessionId, ...initInfo });
-                break;
-              }
-            }
+        const init = initReader.feed(data);
+        if (init) {
+          const { sessionId: _initSessionId, ...initInfo } = init;
+          firstLineReceived = true;
+          if (sendTimeout) {
+            clearTimeout(sendTimeout);
+            sendTimeout = null;
           }
-        } catch (err) {
-          // JSONパースエラーは無視
+          console.log(`[process] Sent to existing session: sessionId=${sessionId}, pid=${pid}, model=${initInfo.model}`);
+
+          // session-started イベント発行（既存セッション再開、init 後に model を含めて発行）
+          processEvents.emit('session-started', {
+            sessionId,
+            pid,
+            timestamp: new Date().toISOString(),
+            resumed: true,
+            projectPath: projectPath || null,
+            model: initInfo.model,
+            ...(engine && { engine })
+          });
+
+          resolve({ pid, sessionId, ...initInfo });
         }
       }
 
       if (onData) {
-        onData(dataStr);
+        onData(data.toString());
       }
     });
 
@@ -478,6 +528,8 @@ function killAllProcesses() {
 export {
   startNewSession,
   sendToSession,
+  createInitReader,
+  resolveStartTimeoutMs,
   getManagedProcesses,
   getManagedProcess,
   killProcess,

@@ -8,7 +8,7 @@
  */
 
 import mqtt from 'mqtt';
-import { startNewSession, sendToSession } from './process.js';
+import { startNewSession, sendToSession, resolveStartTimeoutMs } from './process.js';
 import { isWindowsNonWSL } from './platform.js';
 
 /**
@@ -70,6 +70,7 @@ function setupMqttReceiver(config, engines) {
     }
 
     const allowedTools = config.send?.defaultAllowedTools || [];
+    const startTimeoutMs = resolveStartTimeoutMs(config.send);
     const callbacks = {
       onData: (data) => console.log('[mqtt] stdout:', data),
       onError: (data) => console.error('[mqtt] stderr:', data),
@@ -94,7 +95,7 @@ function setupMqttReceiver(config, engines) {
           console.error(`[mqtt] Session ${sessionId} not found, and no default engine is available; specify "engine" in the command`);
           return;
         }
-        const result = await sendToSession(adapter.spawn, sessionId, prompt, { engine: adapter.id, cwd: projectPath, projectPath, allowedTools, model, ...callbacks });
+        const result = await sendToSession(adapter.spawn, sessionId, prompt, { engine: adapter.id, cwd: projectPath, projectPath, allowedTools, model, startTimeoutMs, ...callbacks });
         console.log(`[mqtt] Sent to existing session: sessionId=${result.sessionId}`);
       } else {
         // 新規起動: engine の指定が無ければ、暗黙の既定のエンジン
@@ -104,7 +105,7 @@ function setupMqttReceiver(config, engines) {
           console.error(`[mqtt] ${reason} (available: ${engines.ids().join(', ')})`);
           return;
         }
-        const result = await startNewSession(target.spawn, prompt, { engine: target.id, cwd: projectPath, projectPath, allowedTools, model, ...callbacks });
+        const result = await startNewSession(target.spawn, prompt, { engine: target.id, cwd: projectPath, projectPath, allowedTools, model, startTimeoutMs, ...callbacks });
         console.log(`[mqtt] Started new session: sessionId=${result.sessionId}`);
       }
     } catch (error) {
